@@ -1,0 +1,166 @@
+# Protocol
+
+Natrium keeps a random 32-byte seed per installation, from which it derives all its database and keystore keys. The
+user can export the seed as an encrypted key file and restore an installation from it. The key of the key file is
+derived from a short PIN and a secret of this service, through an oblivious pseudorandom function (OPRF). As a result:
+
+- Every guess at the PIN needs a request to the service, and the service limits the requests per Wire user.
+- The service sees neither the PIN nor the result.
+- The service does not learn whether a guess was right.
+
+## OPRF
+
+RFC 9497, mode OPRF (`modeOPRF`, 0x00), suite `P256-SHA256`. The verifiable modes (VOPRF, POPRF) are not used. They
+let the client check an answer against a public key, which the client would have to obtain and trust for each user. A
+wrong answer here shows as a failed decryption of the key file; a dishonest server could achieve the same by not
+answering at all.
+
+| Step | Party | RFC 9497 |
+|---|---|---|
+| blind the input | client | `Blind` |
+| evaluate the blinded element | server | `BlindEvaluate` |
+| finalize | client | `Finalize` |
+
+The server uses CIRCL (`github.com/cloudflare/circl/oprf`). Natrium uses `@noble/curves` (`p256_oprf` from
+`@noble/curves/nist.js`). `internal/evaluator/testdata/interop.json` holds fixed values of whole exchanges, which the
+server's tests and `interop/check.mjs` with `@noble/curves` both reproduce.
+
+## Keys
+
+The server keeps one or more master keys of 32 bytes, each with a version from 1. The key of a user is not stored. It
+is derived for each request:
+
+```
+key = DeriveKeyPair(seed = master[keyVersion], info)          RFC 9497, section 3.2.1
+info = "natrium-recovery-v1|" + domain + "|" + userId + "|" + epoch
+```
+
+- `domain` and `userId` are the user's qualified ID from Wire (`qualified_id` of `GET /self`). The domain is in
+  lowercase, the user ID a lowercase UUID in the form 8-4-4-4-12.
+- `epoch` is written in decimal without leading zeros. It is always `0`: key files cannot be revoked yet. A later
+  version can revoke all key files of a user by raising the epoch.
+- The info string is encoded as UTF-8; all its characters are ASCII.
+
+Example:
+
+```
+natrium-recovery-v1|wire.example|39b7f597-dfd1-4dff-86f5-fe1b79cb70a0|0
+```
+
+This encoding is part of the contract. A change makes every existing key file unreadable. The tests hold fixed
+values for it.
+
+## API
+
+### `POST /v1/evaluate`
+
+```
+POST /v1/evaluate
+Authorization: Bearer <Wire access token>
+Content-Type: application/json
+
+{"keyVersion": 1, "blindedElement": "A3I6HlwJuLnBjR3LyinoAH6V8U9HMtk0bUkP/BlREDaN"}
+```
+
+| Field | Meaning |
+|---|---|
+| `keyVersion` | Optional, a number from 1. Omitted when a new key file is made: the server then uses its current version. When a key file is opened, the version from the file. |
+| `blindedElement` | `SerializeElement` of RFC 9497: the compressed SEC1 point of P-256, 33 bytes, in standard base64 (RFC 4648, section 4) with padding. For 33 bytes that is 44 characters without `=`. |
+
+Answer `200`:
+
+```json
+{"keyVersion": 1, "evaluatedElement": "A+s+e/Kb3gwtURsqks/88WVfTfP1IEmKmXHTxwFg1Xu4"}
+```
+
+`keyVersion` is the version used, which the client writes into a new key file. `evaluatedElement` is encoded like
+`blindedElement`.
+
+Answers carry `Cache-Control: no-store`.
+
+### Errors
+
+The body is always `{"error": "<code>"}`.
+
+| Status | Code | When | Counted |
+|---|---|---|---|
+| 400 | `bad_request` | The body is larger than 1 KiB, is not exactly one JSON object, has unknown fields, `keyVersion` is not a number from 1, `blindedElement` is missing, is not standard base64 with padding, is not 33 bytes, is not a point of P-256 or is the identity. | no |
+| 401 | `unauthorized` | The header `Authorization: Bearer <token>` is missing, or Wire rejects the token. The answer carries `WWW-Authenticate: Bearer`. | no |
+| 410 | `key_version_unavailable` | The key version is not one of the active versions. | no |
+| 429 | `too_many_attempts` | The user has reached a limit. `Retry-After` gives the seconds until the attempt would be allowed, rounded up: until the end of the last window whose limit is reached. | no |
+| 503 | `unavailable` | The master keys are not loaded yet, Wire could not be asked or gave no usable answer, or the database cannot be reached. | no |
+| 500 | `internal` | An error in the server. | only if it occurs in the evaluation |
+| 405 | – | Another method than `POST`. | no |
+
+The server checks in this order:
+
+1. master keys loaded,
+2. token (a request to Wire),
+3. body and blinded element,
+4. key version,
+5. limits: count the attempt if it is within all limits,
+6. evaluate.
+
+Only a request that passes the first four checks and is within all limits is counted, and only a counted request is
+evaluated.
+
+The Wire test backend answers tokens it cannot parse at all, such as `x`, with 502 instead of 401. Such tokens
+therefore get 503 rather than 401. Natrium only sends tokens it received from Wire, which Wire can parse.
+
+### Authentication
+
+The server sends the token to `GET /self` of the configured Wire backend, with the API version in the base URL, and
+takes the user from `qualified_id`. It does not cache the answer. 401 and 403 from Wire mean the token is rejected;
+anything else that is not a usable 200 counts as Wire being unavailable. The server does not follow redirects, so the
+token goes only to the configured backend. Every user of that backend may use the service.
+
+### CORS
+
+Pages of any origin may call the API. The server answers the preflight (`OPTIONS /v1/evaluate`) with
+`Access-Control-Allow-Origin: *`, `Access-Control-Allow-Methods: POST` and `Access-Control-Allow-Headers:
+Authorization, Content-Type`, and answers requests with `Access-Control-Allow-Origin: *` and
+`Access-Control-Expose-Headers: Retry-After`. It does not allow credentials.
+
+A list of allowed origins would protect nothing here. CORS protects credentials that the browser adds by itself, such
+as cookies. The API has none: the client sets the Wire token in the `Authorization` header. A page without the token
+gets no further than 401, and whoever has a token can call the API from outside a browser, where CORS does not
+apply.
+
+## Attempts
+
+- Attempts are counted per Wire user against several limits, each with a fixed window of its own. By default a user
+  has 5 attempts per hour and 12 per day. A window starts with the first attempt after the previous window of the
+  same limit ended.
+- An attempt is allowed only if it is within every limit. Then it is counted in every window. An attempt that a limit
+  refuses is not counted in any window, so trying again during the wait does not use up the day.
+- Every allowed attempt counts: a restore with a wrong PIN, a restore with the right PIN, and the export of a new key
+  file. The server cannot tell them apart, and a success does not reset the count.
+- After a limit the user waits until its window ends; `Retry-After` gives the time. Nothing is deleted: otherwise
+  anyone with access to a user's Wire account could destroy the user's key files.
+- The windows are fixed, not sliding. At the end of one hour window and the start of the next, up to 10 attempts are
+  possible within a short time. A day window never has more than 12, so over a longer time the average is at most
+  12 per day.
+- All instances of the service share the counts through PostgreSQL; deciding and counting are one transaction.
+  `Retry-After` is computed from the database's clock.
+
+## Client side (Natrium)
+
+This part is implemented in Natrium. The service must match it.
+
+**Export** (installation with intact storage, logged in):
+
+1. PIN: Unicode NFC, then UTF-8. Natrium requires at least 6 characters.
+2. `Blind(pin)`, `POST /v1/evaluate` without `keyVersion`, `Finalize` gives `o` (32 bytes).
+3. `a = Argon2id(pin, salt, m = 64 MiB, t = 3, p = 1)` with a random salt. Argon2id stays: should the master keys
+   leak, each guess is still expensive.
+4. `fileKey = HKDF-SHA256(ikm = o || a, info = "natrium-keyfile-v1")`.
+5. The seed is encrypted with AES-256-GCM. The associated data is the header and the user's qualified ID. The header,
+   in plaintext, holds an identifier, the format version, `keyVersion`, the Argon2 parameters, the salt and the nonce.
+
+**Restore** (empty browser):
+
+1. Log in to Wire, only to get tokens, without registering a client. The login comes before decrypting, because the
+   service needs the token.
+2. PIN, `POST /v1/evaluate` with `keyVersion` from the header, derive the file key, decrypt.
+3. If AES-GCM fails, the PIN was wrong. The attempt has been counted.
+4. `429` becomes a result of its own with the waiting time, `410` means the key file can no longer be opened.

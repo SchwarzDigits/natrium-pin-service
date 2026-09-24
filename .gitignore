@@ -1,0 +1,14 @@
+# Build output
+/natrium-recovery-server
+/new-master-key
+*.test
+*.out
+coverage.*
+
+# Editors and operating systems
+.idea/
+.vscode/
+.DS_Store
+
+# Dependencies of the interop scripts
+/interop/node_modules/

@@ -1,0 +1,12 @@
+{
+  "name": "natrium-recovery-interop",
+  "private": true,
+  "type": "module",
+  "description": "Checks the server against @noble/curves, the OPRF library of Natrium",
+  "scripts": {
+    "check": "node check.mjs"
+  },
+  "dependencies": {
+    "@noble/curves": "2.4.0"
+  }
+}

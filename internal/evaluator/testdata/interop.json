@@ -1,0 +1,32 @@
+[
+  {
+    "name": "digits",
+    "master": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+    "domain": "wire.example",
+    "userId": "39b7f597-dfd1-4dff-86f5-fe1b79cb70a0",
+    "epoch": 0,
+    "info": "natrium-recovery-v1|wire.example|39b7f597-dfd1-4dff-86f5-fe1b79cb70a0|0",
+    "secretKey": "50200e86f27c7a53becc68ffada0edd3034c6570a46badd6541969d21f3b9649",
+    "pin": "123456",
+    "input": "313233343536",
+    "blind": "3338fa65ec36e0290022b48eb562889d89dbfa691d1cde91517fa222ed7ad364",
+    "blindedElement": "A4aFtYKxKBlhHYd8F6OcKbRg+zqeaKZnmby5fWsF7vxM",
+    "evaluatedElement": "A+s+e/Kb3gwtURsqks/88WVfTfP1IEmKmXHTxwFg1Xu4",
+    "output": "013c7a4db8f18dae81eedacb080295452328f8cd6fa1bcdf38d3471607346c37"
+  },
+  {
+    "name": "unicode",
+    "master": "101112131415161718191a1b1c1d1e1f101112131415161718191a1b1c1d1e1f",
+    "domain": "schwarz-dev-wire.runs.onstackit.cloud",
+    "userId": "0f5c3a1e-7b2d-4c8e-9a6f-2d4b8e1c7a90",
+    "epoch": 0,
+    "info": "natrium-recovery-v1|schwarz-dev-wire.runs.onstackit.cloud|0f5c3a1e-7b2d-4c8e-9a6f-2d4b8e1c7a90|0",
+    "secretKey": "d687ae3fae427b3d289c4d0102d4f48ed1d6eca2a65e8e26afe5d6c0a9dbe7e0",
+    "pin": "Grüße 2026",
+    "input": "4772c3bcc39f652032303236",
+    "blind": "0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f",
+    "blindedElement": "A5RtTH3y8WNxMyyXkJU8mw1MCxVMFuQ8vkoefSyMY+xr",
+    "evaluatedElement": "A8UTmsroA0BzpBLjLy4kEieK3LaMT6MOnOiXDNkby5U4",
+    "output": "6c385d5cdbb60ad68d8b2205630287a7ca97c23c0ae657ce9ee2efe671decf7f"
+  }
+]
