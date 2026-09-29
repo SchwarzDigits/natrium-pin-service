@@ -78,7 +78,7 @@ func (f *fakeCounter) Take(_ context.Context, domain, userID string) (attempts.D
 		f.counts[userID+"@"+domain]--
 		return attempts.Decision{RetryAfter: f.retryAfter}, nil
 	}
-	return attempts.Decision{Allowed: true}, nil
+	return attempts.Decision{Allowed: true, Remaining: f.limit - f.counts[userID+"@"+domain]}, nil
 }
 
 func (f *fakeCounter) count() int {
@@ -160,19 +160,26 @@ func errorCode(t *testing.T, rec *httptest.ResponseRecorder) string {
 }
 
 func evaluateResult(t *testing.T, rec *httptest.ResponseRecorder) (uint32, []byte) {
+	version, evaluated, _ := evaluateAnswer(t, rec)
+	return version, evaluated
+}
+
+func evaluateAnswer(t *testing.T, rec *httptest.ResponseRecorder) (uint32, []byte, int) {
 	t.Helper()
 	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
 	dec := json.NewDecoder(rec.Body)
 	dec.DisallowUnknownFields()
 	var resp struct {
-		KeyVersion       uint32 `json:"keyVersion"`
-		EvaluatedElement string `json:"evaluatedElement"`
+		KeyVersion        uint32 `json:"keyVersion"`
+		EvaluatedElement  string `json:"evaluatedElement"`
+		AttemptsRemaining *int   `json:"attemptsRemaining"`
 	}
 	require.NoError(t, dec.Decode(&resp))
 	evaluated, err := base64.StdEncoding.Strict().DecodeString(resp.EvaluatedElement)
 	require.NoError(t, err)
 	require.Len(t, evaluated, evaluator.ElementSize)
-	return resp.KeyVersion, evaluated
+	require.NotNil(t, resp.AttemptsRemaining, "attemptsRemaining is always present")
+	return resp.KeyVersion, evaluated, *resp.AttemptsRemaining
 }
 
 func expected(t *testing.T, master []byte, blinded string) []byte {
@@ -186,6 +193,16 @@ func expected(t *testing.T, master []byte, blinded string) []byte {
 	out, err := evaluator.Evaluate(master, info, element)
 	require.NoError(t, err)
 	return out
+}
+
+func TestEvaluateReportsTheAttemptsLeft(t *testing.T) {
+	f := newFixture(t)
+	f.counter.limit = 3
+	for want := 2; want >= 0; want-- {
+		_, _, left := evaluateAnswer(t, f.post(t, `{"blindedElement":"`+blindedValid+`"}`))
+		require.Equal(t, want, left)
+	}
+	require.Equal(t, http.StatusTooManyRequests, f.post(t, `{"blindedElement":"`+blindedValid+`"}`).Code)
 }
 
 func TestEvaluateWithTheCurrentVersion(t *testing.T) {

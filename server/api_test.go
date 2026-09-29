@@ -84,6 +84,12 @@ func newUserID() string {
 // evaluate runs the client side for pin against the server at addr and returns the status, the Retry-After header
 // and, for 200, the OPRF output.
 func evaluate(t *testing.T, addr, token, pin string) (int, string, []byte) {
+	status, retryAfter, output, _ := evaluateCounting(t, addr, token, pin)
+	return status, retryAfter, output
+}
+
+// evaluateCounting is evaluate that also returns the attempts left of a 200 answer.
+func evaluateCounting(t *testing.T, addr, token, pin string) (int, string, []byte, int) {
 	t.Helper()
 	client := oprf.NewClient(oprf.SuiteP256)
 	finalize, request, err := client.Blind([][]byte{[]byte(pin)})
@@ -101,12 +107,13 @@ func evaluate(t *testing.T, addr, token, pin string) (int, string, []byte) {
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		_, _ = io.Copy(io.Discard, resp.Body)
-		return resp.StatusCode, resp.Header.Get("Retry-After"), nil
+		return resp.StatusCode, resp.Header.Get("Retry-After"), nil, 0
 	}
 
 	var answer struct {
-		KeyVersion       uint32 `json:"keyVersion"`
-		EvaluatedElement string `json:"evaluatedElement"`
+		KeyVersion        uint32 `json:"keyVersion"`
+		EvaluatedElement  string `json:"evaluatedElement"`
+		AttemptsRemaining int    `json:"attemptsRemaining"`
 	}
 	require.NoError(t, json.NewDecoder(resp.Body).Decode(&answer))
 	evaluated, err := base64.StdEncoding.DecodeString(answer.EvaluatedElement)
@@ -115,7 +122,7 @@ func evaluate(t *testing.T, addr, token, pin string) (int, string, []byte) {
 	require.NoError(t, e.UnmarshalBinary(evaluated))
 	outputs, err := client.Finalize(finalize, &oprf.Evaluation{Elements: []oprf.Evaluated{e}})
 	require.NoError(t, err)
-	return resp.StatusCode, "", outputs[0]
+	return resp.StatusCode, "", outputs[0], answer.AttemptsRemaining
 }
 
 // Two instances at one database: they give the same output for the same PIN, and together they allow 5 attempts per
@@ -137,8 +144,9 @@ func TestTwoInstancesShareTheLimit(t *testing.T) {
 	token := exchange.token(t, newUserID())
 	var first []byte
 	for i := range 5 {
-		status, _, output := evaluate(t, instances[i%2].addr, token, "123456")
+		status, _, output, left := evaluateCounting(t, instances[i%2].addr, token, "123456")
 		require.Equal(t, http.StatusOK, status, "attempt %d", i+1)
+		require.Equal(t, 4-i, left, "attempts left after attempt %d, counted across both instances", i+1)
 		if first == nil {
 			first = output
 		}

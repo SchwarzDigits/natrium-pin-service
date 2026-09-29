@@ -137,6 +137,9 @@ type evaluateRequest struct {
 type evaluateResponse struct {
 	KeyVersion       uint32 `json:"keyVersion"`
 	EvaluatedElement string `json:"evaluatedElement"`
+	// AttemptsRemaining is how many more attempts the user has before a limit is reached. A client whose PIN turns
+	// out to be wrong can show it.
+	AttemptsRemaining int `json:"attemptsRemaining"`
 }
 
 // outcome is what a request logs.
@@ -241,8 +244,9 @@ func (h *Handler) serve(w http.ResponseWriter, r *http.Request) outcome {
 		return o
 	}
 	writeJSON(w, http.StatusOK, evaluateResponse{
-		KeyVersion:       o.keyVersion,
-		EvaluatedElement: base64.StdEncoding.EncodeToString(evaluated),
+		KeyVersion:        o.keyVersion,
+		EvaluatedElement:  base64.StdEncoding.EncodeToString(evaluated),
+		AttemptsRemaining: decision.Remaining,
 	})
 	o.result = resultOK
 	return o

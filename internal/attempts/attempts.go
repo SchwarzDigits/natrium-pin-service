@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io/fs"
 	"log/slog"
+	"math"
 	"slices"
 	"strconv"
 	"strings"
@@ -154,6 +155,9 @@ type Decision struct {
 	Allowed bool
 	// RetryAfter is, for an attempt that is not allowed, the time until the last window whose limit is reached ends.
 	RetryAfter time.Duration
+	// Remaining is, for an allowed attempt, how many more attempts all limits allow after this one before a window
+	// ends. It is 0 for an attempt that is not allowed.
+	Remaining int
 }
 
 // Counter counts attempts in a pool whose schema is up to date. See Migrate.
@@ -185,17 +189,21 @@ func (c *Counter) Take(ctx context.Context, domain, userID string) (Decision, er
 			return err
 		}
 		decision.Allowed = true
+		decision.Remaining = math.MaxInt
 		var windowUs int64
 		var windowEnd, now time.Time
 		var n int
 		_, err = pgx.ForEachRow(rows, []any{&windowUs, &windowEnd, &n, &now}, func() error {
-			if n >= c.limits[windowUs].Attempts {
+			limit := c.limits[windowUs].Attempts
+			if n >= limit {
 				decision.Allowed = false
 				decision.RetryAfter = max(decision.RetryAfter, windowEnd.Sub(now))
 			}
+			decision.Remaining = min(decision.Remaining, limit-n-1)
 			return nil
 		})
 		if err != nil || !decision.Allowed {
+			decision.Remaining = 0
 			return err
 		}
 		_, err = tx.Exec(ctx, countAttempt, domain, userID, c.windows)
