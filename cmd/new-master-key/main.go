@@ -1,8 +1,8 @@
-// Command new-master-key creates a master key for natrium-recovery-server and has the STACKIT KMS encrypt it. It
-// prints only the entry for NATRIUM_RECOVERY_MASTER_KEYS, <keyVersion>:<kmsVersion>:<base64 ciphertext>, after
+// Command new-master-key creates a master key for natrium-pin-service and has the STACKIT KMS encrypt it. It
+// prints only the entry for NATRIUM_PIN_MASTER_KEYS, <keyVersion>:<kmsVersion>:<base64 ciphertext>, after
 // checking that the KMS decrypts it again. The master key in plaintext never leaves the process's memory.
 //
-// The KMS key and the service account come from the NATRIUM_RECOVERY_KMS_* variables of the server. The service
+// The KMS key and the service account come from the NATRIUM_PIN_KMS_* variables of the server. The service
 // account needs to encrypt and decrypt with the key.
 //
 //	new-master-key -key-version 2 -kms-version 1
@@ -16,8 +16,8 @@ import (
 	"io"
 	"os"
 
-	"github.com/SchwarzDigits/natrium-recovery-server/internal/config"
-	"github.com/SchwarzDigits/natrium-recovery-server/internal/masterkey"
+	"github.com/SchwarzDigits/natrium-pin-service/internal/config"
+	"github.com/SchwarzDigits/natrium-pin-service/internal/masterkey"
 )
 
 func main() {

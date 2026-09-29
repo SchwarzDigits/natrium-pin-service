@@ -12,7 +12,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/SchwarzDigits/natrium-recovery-server/internal/platform"
+	"github.com/SchwarzDigits/natrium-pin-service/internal/platform"
 )
 
 func get(t *testing.T, h http.Handler) (int, string) {

@@ -11,9 +11,9 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/SchwarzDigits/natrium-recovery-server/internal/masterkey"
-	"github.com/SchwarzDigits/natrium-recovery-server/internal/masterkey/masterkeytest"
-	"github.com/SchwarzDigits/natrium-recovery-server/server"
+	"github.com/SchwarzDigits/natrium-pin-service/internal/masterkey"
+	"github.com/SchwarzDigits/natrium-pin-service/internal/masterkey/masterkeytest"
+	"github.com/SchwarzDigits/natrium-pin-service/server"
 )
 
 func TestPrintsAnEntryTheServerLoads(t *testing.T) {
@@ -63,7 +63,7 @@ func TestNeedsBothVersions(t *testing.T) {
 func TestReportsKMSErrors(t *testing.T) {
 	var out bytes.Buffer
 	err := run(context.Background(), []string{"-key-version", "1", "-kms-version", "1"}, &out, io.Discard,
-		func() (masterkey.KMS, error) { return nil, errors.New("NATRIUM_RECOVERY_KMS_KEY_ID is required") })
-	require.ErrorContains(t, err, "NATRIUM_RECOVERY_KMS_KEY_ID")
+		func() (masterkey.KMS, error) { return nil, errors.New("NATRIUM_PIN_KMS_KEY_ID is required") })
+	require.ErrorContains(t, err, "NATRIUM_PIN_KMS_KEY_ID")
 	require.Empty(t, out.String())
 }

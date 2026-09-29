@@ -11,7 +11,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/SchwarzDigits/natrium-recovery-server/internal/masterkey/masterkeytest"
+	"github.com/SchwarzDigits/natrium-pin-service/internal/masterkey/masterkeytest"
 )
 
 func generate(t *testing.T, kms KMS, keyVersion uint32, kmsVersion int64) Entry {

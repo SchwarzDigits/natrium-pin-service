@@ -1,8 +1,8 @@
-// Package httpapi serves POST /v1/evaluate: it checks the Wire token, the request and the key version, counts the
+// Package httpapi serves POST /v1/evaluate: it checks the token, the request and the key version, counts the
 // attempt and evaluates the blinded element with the user's key.
 //
 // Any web page may call the API (CORS with origin *). CORS only protects credentials that the browser adds by itself,
-// such as cookies. The API has none: the client sets the Wire token in the Authorization header, and a page without
+// such as cookies. The API has none: the client sets the token in the Authorization header, and a page without
 // the token gets no further than 401.
 //
 // Only a valid, authenticated request with an active key version is counted, and only a counted request within the
@@ -26,9 +26,9 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus"
 
-	"github.com/SchwarzDigits/natrium-recovery-server/internal/attempts"
-	"github.com/SchwarzDigits/natrium-recovery-server/internal/evaluator"
-	"github.com/SchwarzDigits/natrium-recovery-server/internal/wireauth"
+	"github.com/SchwarzDigits/natrium-pin-service/internal/attempts"
+	"github.com/SchwarzDigits/natrium-pin-service/internal/evaluator"
+	"github.com/SchwarzDigits/natrium-pin-service/internal/tokenauth"
 )
 
 // PathEvaluate is the path of the API.
@@ -69,9 +69,9 @@ var results = []string{
 	resultInternal,
 }
 
-// Authenticator returns the user of a Wire access token. See wireauth.Client.
+// Authenticator returns the user of a token of natrium-token-exchange. See tokenauth.Verifier.
 type Authenticator interface {
-	Authenticate(ctx context.Context, token string) (wireauth.QualifiedID, error)
+	Authenticate(ctx context.Context, token string) (tokenauth.QualifiedID, error)
 }
 
 // Counter records an attempt of a user. See attempts.Counter.
@@ -97,9 +97,9 @@ type Options struct {
 
 // Handler serves the API.
 type Handler struct {
-	opts     Options
-	requests *prometheus.CounterVec
-	wireAuth prometheus.Histogram
+	opts       Options
+	requests   *prometheus.CounterVec
+	tokenCheck prometheus.Histogram
 }
 
 // New returns the handler and registers its metrics.
@@ -107,19 +107,19 @@ func New(opts Options) *Handler {
 	h := &Handler{
 		opts: opts,
 		requests: prometheus.NewCounterVec(prometheus.CounterOpts{
-			Name: "natrium_recovery_evaluate_requests_total",
+			Name: "natrium_pin_evaluate_requests_total",
 			Help: "Requests to " + PathEvaluate + " by result.",
 		}, []string{"result"}),
-		wireAuth: prometheus.NewHistogram(prometheus.HistogramOpts{
-			Name:    "natrium_recovery_wire_auth_duration_seconds",
-			Help:    "Duration of the token check with the Wire backend.",
+		tokenCheck: prometheus.NewHistogram(prometheus.HistogramOpts{
+			Name:    "natrium_pin_token_check_duration_seconds",
+			Help:    "Duration of the token check, including a fetch of the key set for an unknown kid.",
 			Buckets: []float64{.01, .025, .05, .1, .25, .5, 1, 2.5, 5},
 		}),
 	}
 	for _, r := range results {
 		h.requests.WithLabelValues(r)
 	}
-	opts.Metrics.MustRegister(h.requests, h.wireAuth)
+	opts.Metrics.MustRegister(h.requests, h.tokenCheck)
 	return h
 }
 
@@ -142,7 +142,7 @@ type evaluateResponse struct {
 // outcome is what a request logs.
 type outcome struct {
 	result     string
-	user       wireauth.QualifiedID
+	user       tokenauth.QualifiedID
 	keyVersion uint32
 	err        error
 }
@@ -185,9 +185,9 @@ func (h *Handler) serve(w http.ResponseWriter, r *http.Request) outcome {
 	}
 	start := time.Now()
 	user, err := h.opts.Auth.Authenticate(r.Context(), token)
-	h.wireAuth.Observe(time.Since(start).Seconds())
+	h.tokenCheck.Observe(time.Since(start).Seconds())
 	switch {
-	case errors.Is(err, wireauth.ErrUnauthorized):
+	case errors.Is(err, tokenauth.ErrUnauthorized):
 		w.Header().Set("WWW-Authenticate", "Bearer")
 		writeError(w, http.StatusUnauthorized, codeUnauthorized)
 		return outcome{result: resultUnauthorized}

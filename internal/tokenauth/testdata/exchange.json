@@ -1,0 +1,18 @@
+{
+  "audience": "https://pin.example",
+  "issuedAt": 1790683200,
+  "issuer": "https://token.example",
+  "jwks": {
+    "keys": [
+      {
+        "kty": "OKP",
+        "crv": "Ed25519",
+        "x": "0EqyMnQrtKs6E2i9RhXk5tAiSrcaAWuvhSCjMsl3hzc",
+        "kid": "2026-09",
+        "alg": "EdDSA",
+        "use": "sig"
+      }
+    ]
+  },
+  "token": "eyJhbGciOiJFZERTQSIsImtpZCI6IjIwMjYtMDkiLCJ0eXAiOiJKV1QifQ.eyJpc3MiOiJodHRwczovL3Rva2VuLmV4YW1wbGUiLCJhdWQiOiJodHRwczovL3Bpbi5leGFtcGxlIiwic3ViIjoiMzliN2Y1OTctZGZkMS00ZGZmLTg2ZjUtZmUxYjc5Y2I3MGEwQHdpcmUuZXhhbXBsZSIsInRlYW0iOiI4YjNjMWEyZS0wZjRkLTRlNWEtOWI2Yy03ZDhlOWYwYTFiMmMiLCJpYXQiOjE3OTA2ODMyMDAsIm5iZiI6MTc5MDY4MzIwMCwiZXhwIjoxNzkwNjgzODAwLCJqdGkiOiJveERpTDl3eFQ1bjBKTF9oYXlrNVR3In0.ioO8aZp5lF1ArrLBD0Aba4uG9WSDAcNGGEkIK8lTznDKVaXj8jPhjBeNVioJEbDyBaQbWHaw5Bv74ER8p6Z3CA"
+}

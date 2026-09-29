@@ -15,9 +15,9 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/SchwarzDigits/natrium-recovery-server/internal/config"
-	"github.com/SchwarzDigits/natrium-recovery-server/internal/masterkey/masterkeytest"
-	"github.com/SchwarzDigits/natrium-recovery-server/server"
+	"github.com/SchwarzDigits/natrium-pin-service/internal/config"
+	"github.com/SchwarzDigits/natrium-pin-service/internal/masterkey/masterkeytest"
+	"github.com/SchwarzDigits/natrium-pin-service/server"
 )
 
 // lockedBuffer collects log output written from several goroutines.
@@ -39,16 +39,16 @@ func (b *lockedBuffer) String() string {
 }
 
 // The command started with only its environment variables serves the probes and the metrics, logs JSON and stops
-// when its context is canceled. It needs a PostgreSQL database in NATRIUM_RECOVERY_TEST_DATABASE_URL. Its KMS
+// when its context is canceled. It needs a PostgreSQL database in NATRIUM_PIN_TEST_DATABASE_URL. Its KMS
 // service account fetches tokens from an address nothing listens on, so the master keys do not load and the server
 // stays not ready.
 func TestRunServesWithEnvironmentVariables(t *testing.T) {
 	if testing.Short() {
 		t.Skip("integration test: skipped with -short")
 	}
-	databaseURL := os.Getenv("NATRIUM_RECOVERY_TEST_DATABASE_URL")
+	databaseURL := os.Getenv("NATRIUM_PIN_TEST_DATABASE_URL")
 	if databaseURL == "" {
-		t.Skip("integration test: NATRIUM_RECOVERY_TEST_DATABASE_URL is not set")
+		t.Skip("integration test: NATRIUM_PIN_TEST_DATABASE_URL is not set")
 	}
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
@@ -57,7 +57,9 @@ func TestRunServesWithEnvironmentVariables(t *testing.T) {
 
 	t.Setenv(config.EnvPort, strconv.Itoa(port))
 	t.Setenv(config.EnvLogLevel, "info")
-	t.Setenv(config.EnvWireAPIURL, "https://127.0.0.1:1/v15")
+	t.Setenv(config.EnvTokenJWKSURL, "https://127.0.0.1:1/.well-known/jwks.json")
+	t.Setenv(config.EnvTokenIssuer, "https://token.example")
+	t.Setenv(config.EnvTokenAudience, "https://pin.example")
 	t.Setenv(config.EnvDatabaseURL, databaseURL)
 	t.Setenv(config.EnvKMSProjectID, "project")
 	t.Setenv(config.EnvKMSRegion, "eu01")

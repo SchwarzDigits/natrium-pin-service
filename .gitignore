@@ -1,5 +1,5 @@
 # Build output
-/natrium-recovery-server
+/natrium-pin-service
 /new-master-key
 *.test
 *.out

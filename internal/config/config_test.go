@@ -8,19 +8,23 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/SchwarzDigits/natrium-recovery-server/internal/config"
-	"github.com/SchwarzDigits/natrium-recovery-server/server"
+	"github.com/SchwarzDigits/natrium-pin-service/internal/config"
+	"github.com/SchwarzDigits/natrium-pin-service/server"
 )
 
 const (
-	wireAPIURL        = "https://nginz-https.wire.example/v15"
+	jwksURL           = "https://token.example/.well-known/jwks.json"
+	tokenIssuer       = "https://token.example"
+	tokenAudience     = "https://pin.example"
 	databaseURL       = "postgres://recovery@db.example/recovery"
 	serviceAccountKey = `{"credentials":{"privateKey":"key"}}`
 )
 
 func setMinimal(t *testing.T) {
 	t.Helper()
-	t.Setenv(config.EnvWireAPIURL, wireAPIURL)
+	t.Setenv(config.EnvTokenJWKSURL, jwksURL)
+	t.Setenv(config.EnvTokenIssuer, tokenIssuer)
+	t.Setenv(config.EnvTokenAudience, tokenAudience)
 	t.Setenv(config.EnvDatabaseURL, databaseURL)
 	t.Setenv(config.EnvKMSProjectID, "project")
 	t.Setenv(config.EnvKMSRegion, "eu01")
@@ -37,7 +41,7 @@ func TestDefaults(t *testing.T) {
 	require.NoError(t, err)
 	want := server.DefaultConfig()
 	want.Addr = ":8080"
-	want.WireAPIURL = wireAPIURL
+	want.TokenJWKSURL, want.TokenIssuer, want.TokenAudience = jwksURL, tokenIssuer, tokenAudience
 	want.DatabaseURL = databaseURL
 	want.KMSProjectID, want.KMSRegion, want.KMSKeyRingID, want.KMSKeyID = "project", "eu01", "ring", "key"
 	want.KMSServiceAccountKey = serviceAccountKey
@@ -108,8 +112,10 @@ func TestInvalidVariableIsNamedInError(t *testing.T) {
 		{config.EnvPort, "65536"},
 		{config.EnvPort, "http"},
 		{config.EnvLogLevel, "loud"},
-		{config.EnvWireAPIURL, ""},
-		{config.EnvWireAPIURL, "http://nginz-https.wire.example/v15"},
+		{config.EnvTokenJWKSURL, ""},
+		{config.EnvTokenJWKSURL, "http://token.example/.well-known/jwks.json"},
+		{config.EnvTokenIssuer, ""},
+		{config.EnvTokenAudience, ""},
 		{config.EnvDatabaseURL, ""},
 		{config.EnvLimits, ","},
 		{config.EnvLimits, "5"},

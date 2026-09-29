@@ -21,9 +21,9 @@ import (
 	dto "github.com/prometheus/client_model/go"
 	"github.com/stretchr/testify/require"
 
-	"github.com/SchwarzDigits/natrium-recovery-server/internal/attempts"
-	"github.com/SchwarzDigits/natrium-recovery-server/internal/evaluator"
-	"github.com/SchwarzDigits/natrium-recovery-server/internal/wireauth"
+	"github.com/SchwarzDigits/natrium-pin-service/internal/attempts"
+	"github.com/SchwarzDigits/natrium-pin-service/internal/evaluator"
+	"github.com/SchwarzDigits/natrium-pin-service/internal/tokenauth"
 )
 
 const (
@@ -37,7 +37,7 @@ const (
 	blindedValid = "A3I6HlwJuLnBjR3LyinoAH6V8U9HMtk0bUkP/BlREDaN" // RFC 9497 A.3.1.1, BlindedElement
 )
 
-var alice = wireauth.QualifiedID{Domain: aliceDomain, ID: aliceID}
+var alice = tokenauth.QualifiedID{Domain: aliceDomain, ID: aliceID}
 
 type fakeAuth struct {
 	mu    sync.Mutex
@@ -45,15 +45,15 @@ type fakeAuth struct {
 	err   error
 }
 
-func (f *fakeAuth) Authenticate(_ context.Context, t string) (wireauth.QualifiedID, error) {
+func (f *fakeAuth) Authenticate(_ context.Context, t string) (tokenauth.QualifiedID, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.calls++
 	if f.err != nil {
-		return wireauth.QualifiedID{}, f.err
+		return tokenauth.QualifiedID{}, f.err
 	}
 	if t != token {
-		return wireauth.QualifiedID{}, wireauth.ErrUnauthorized
+		return tokenauth.QualifiedID{}, tokenauth.ErrUnauthorized
 	}
 	return alice, nil
 }
@@ -333,7 +333,7 @@ func TestUnavailable(t *testing.T) {
 	})
 	t.Run("Wire unavailable", func(t *testing.T) {
 		f := newFixture(t)
-		f.auth.err = wireauth.ErrUnavailable
+		f.auth.err = tokenauth.ErrUnavailable
 		rec := f.post(t, `{"blindedElement":"`+blindedValid+`"}`)
 		require.Equal(t, http.StatusServiceUnavailable, rec.Code)
 		require.Equal(t, codeUnavailable, errorCode(t, rec))
@@ -415,6 +415,6 @@ func TestLogsAndMetrics(t *testing.T) {
 		require.Equal(t, want, testutil.ToFloat64(f.api.requests.WithLabelValues(result)), result)
 	}
 	var wire dto.Metric
-	require.NoError(t, f.api.wireAuth.Write(&wire))
+	require.NoError(t, f.api.tokenCheck.Write(&wire))
 	require.EqualValues(t, 5, wire.GetHistogram().GetSampleCount(), "every request with a token asked Wire")
 }

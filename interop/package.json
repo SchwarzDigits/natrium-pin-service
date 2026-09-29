@@ -1,5 +1,5 @@
 {
-  "name": "natrium-recovery-interop",
+  "name": "natrium-pin-interop",
   "private": true,
   "type": "module",
   "description": "Checks the server against @noble/curves, the OPRF library of Natrium",

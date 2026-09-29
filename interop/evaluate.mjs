@@ -1,17 +1,17 @@
 // Runs the client side against a running server, as Natrium will: it blinds the PIN with @noble/curves, calls
-// POST /v1/evaluate with a Wire access token and finalizes the answer. It prints the status, the key version and a
+// POST /v1/evaluate with a PIN token of natrium-token-exchange and finalizes the answer. It prints the status, the key version and a
 // fingerprint of the output. With the same PIN, user and key version the fingerprint is the same in every run.
 //
-//   NATRIUM_RECOVERY_URL=https://recovery.example NATRIUM_RECOVERY_TOKEN=<Wire access token> \
+//   NATRIUM_PIN_URL=https://pin.example NATRIUM_PIN_TOKEN=<PIN token> \
 //     node evaluate.mjs <pin> [keyVersion]
 import { createHash } from 'node:crypto';
 import { p256_oprf } from '@noble/curves/nist.js';
 
 const [pin, keyVersion] = process.argv.slice(2);
-const url = process.env.NATRIUM_RECOVERY_URL;
-const token = process.env.NATRIUM_RECOVERY_TOKEN;
+const url = process.env.NATRIUM_PIN_URL;
+const token = process.env.NATRIUM_PIN_TOKEN;
 if (!pin || !url || !token) {
-  console.error('usage: NATRIUM_RECOVERY_URL=... NATRIUM_RECOVERY_TOKEN=... node evaluate.mjs <pin> [keyVersion]');
+  console.error('usage: NATRIUM_PIN_URL=... NATRIUM_PIN_TOKEN=... node evaluate.mjs <pin> [keyVersion]');
   process.exit(2);
 }
 
