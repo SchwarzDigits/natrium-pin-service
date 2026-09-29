@@ -10,7 +10,7 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/SchwarzDigits/natrium-pin-service/internal/config"
+	"github.com/SchwarzDigits/natrium-pin-service/config"
 	"github.com/SchwarzDigits/natrium-pin-service/internal/platform"
 	"github.com/SchwarzDigits/natrium-pin-service/server"
 )
