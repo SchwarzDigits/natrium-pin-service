@@ -88,13 +88,13 @@ func TestStackitNeedsThePrivateKeyInTheServiceAccountKey(t *testing.T) {
 }
 
 // Needs a STACKIT KMS key and a service account that may use it:
-// NATRIUM_RECOVERY_TEST_KMS_PROJECT_ID, _REGION, _KEY_RING_ID, _KEY_ID, _KEY_VERSION and
-// NATRIUM_RECOVERY_TEST_KMS_SERVICE_ACCOUNT_KEY (the JSON key). Skipped without them.
+// NATRIUM_PIN_TEST_KMS_PROJECT_ID, _REGION, _KEY_RING_ID, _KEY_ID, _KEY_VERSION and
+// NATRIUM_PIN_TEST_KMS_SERVICE_ACCOUNT_KEY (the JSON key). Skipped without them.
 func TestStackitLive(t *testing.T) {
 	if testing.Short() {
 		t.Skip("integration test: skipped with -short")
 	}
-	const prefix = "NATRIUM_RECOVERY_TEST_KMS_"
+	const prefix = "NATRIUM_PIN_TEST_KMS_"
 	cfg := StackitConfig{
 		ProjectID:         os.Getenv(prefix + "PROJECT_ID"),
 		Region:            os.Getenv(prefix + "REGION"),
@@ -104,7 +104,7 @@ func TestStackitLive(t *testing.T) {
 	}
 	version, _ := strconv.ParseInt(os.Getenv(prefix+"KEY_VERSION"), 10, 64)
 	if cfg.ProjectID == "" || cfg.ServiceAccountKey == "" || version == 0 {
-		t.Skip("integration test: NATRIUM_RECOVERY_TEST_KMS_* is not set")
+		t.Skip("integration test: NATRIUM_PIN_TEST_KMS_* is not set")
 	}
 	kms, err := NewStackit(cfg)
 	require.NoError(t, err)

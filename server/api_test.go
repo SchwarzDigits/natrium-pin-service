@@ -1,6 +1,7 @@
 package server
 
 import (
+	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
@@ -10,31 +11,68 @@ import (
 	"net/http/httptest"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/cloudflare/circl/oprf"
+	"github.com/golang-jwt/jwt/v5"
 	"github.com/stretchr/testify/require"
 
-	"github.com/SchwarzDigits/natrium-recovery-server/internal/masterkey/masterkeytest"
+	"github.com/SchwarzDigits/natrium-pin-service/internal/masterkey/masterkeytest"
 )
 
-// fakeWire answers GET /v15/self for the token "token-<uuid>" with that user.
-func fakeWire(t *testing.T) *httptest.Server {
+const (
+	tokenIssuer   = "https://token.example"
+	tokenAudience = "https://pin.example"
+)
+
+// fakeExchange serves the key set of a fake natrium-token-exchange and issues its tokens. While down is set, the key
+// set answers 503.
+type fakeExchange struct {
+	server  *httptest.Server
+	private ed25519.PrivateKey
+	down    atomic.Bool
+}
+
+func newFakeExchange(t *testing.T) *fakeExchange {
 	t.Helper()
+	public, private, err := ed25519.GenerateKey(nil)
+	require.NoError(t, err)
+	e := &fakeExchange{private: private}
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET /v15/self", func(w http.ResponseWriter, r *http.Request) {
-		id, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer token-")
-		if !ok {
-			w.WriteHeader(http.StatusUnauthorized)
+	mux.HandleFunc("GET /.well-known/jwks.json", func(w http.ResponseWriter, _ *http.Request) {
+		if e.down.Load() {
+			w.WriteHeader(http.StatusServiceUnavailable)
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = fmt.Fprintf(w, `{"qualified_id":{"domain":"wire.example","id":%q}}`, id)
+		_, _ = fmt.Fprintf(w, `{"keys":[{"kty":"OKP","crv":"Ed25519","kid":"k1","alg":"EdDSA","use":"sig","x":%q}]}`,
+			base64.RawURLEncoding.EncodeToString(public))
 	})
-	server := httptest.NewTLSServer(mux)
-	t.Cleanup(server.Close)
-	return server
+	e.server = httptest.NewTLSServer(mux)
+	t.Cleanup(e.server.Close)
+	return e
+}
+
+// use points cfg and deps at the exchange.
+func (e *fakeExchange) use(cfg *Config, deps *dependencies) {
+	cfg.TokenJWKSURL = e.server.URL + "/.well-known/jwks.json"
+	deps.jwksHTTP = e.server.Client()
+}
+
+// token returns a PIN token for the user with the given ID.
+func (e *fakeExchange) token(t *testing.T, userID string) string {
+	t.Helper()
+	now := time.Now()
+	tok := jwt.NewWithClaims(jwt.SigningMethodEdDSA, jwt.MapClaims{
+		"iss": tokenIssuer, "aud": tokenAudience, "sub": userID + "@wire.example",
+		"iat": now.Unix(), "nbf": now.Unix(), "exp": now.Add(10 * time.Minute).Unix(),
+	})
+	tok.Header["kid"] = "k1"
+	s, err := tok.SignedString(e.private)
+	require.NoError(t, err)
+	return s
 }
 
 func newUserID() string {
@@ -84,19 +122,19 @@ func evaluate(t *testing.T, addr, token, pin string) (int, string, []byte) {
 // user and hour. The 6th is answered with 429 and Retry-After, and another user is not affected.
 func TestTwoInstancesShareTheLimit(t *testing.T) {
 	kms := masterkeytest.NewFakeKMS()
-	wire := fakeWire(t)
+	exchange := newFakeExchange(t)
 	cfg := valid(t)
 	cfg.DatabaseURL = testDatabaseURL(t)
-	cfg.WireAPIURL = wire.URL + "/v15"
 	withMasterKeys(t, &cfg, kms, 1)
-	deps := dependencies{kms: kms, wireHTTP: wire.Client()}
+	deps := dependencies{kms: kms}
+	exchange.use(&cfg, &deps)
 	instances := []*running{start(t, cfg, deps), start(t, cfg, deps)}
 	for _, r := range instances {
 		require.Eventually(t, func() bool { return get("http://"+r.addr+PathReady) == http.StatusOK },
 			10*time.Second, 20*time.Millisecond)
 	}
 
-	token := "token-" + newUserID()
+	token := exchange.token(t, newUserID())
 	var first []byte
 	for i := range 5 {
 		status, _, output := evaluate(t, instances[i%2].addr, token, "123456")
@@ -114,7 +152,7 @@ func TestTwoInstancesShareTheLimit(t *testing.T) {
 	require.Greater(t, seconds, 60*60-60)
 	require.LessOrEqual(t, seconds, 60*60)
 
-	status, _, _ = evaluate(t, instances[1].addr, "token-"+newUserID(), "123456")
+	status, _, _ = evaluate(t, instances[1].addr, exchange.token(t, newUserID()), "123456")
 	require.Equal(t, http.StatusOK, status)
 
 	status, _, _ = evaluate(t, instances[1].addr, "not-a-token", "123456")

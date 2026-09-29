@@ -1,8 +1,8 @@
-// Integration tests for the counter. They need a PostgreSQL database, set in NATRIUM_RECOVERY_TEST_DATABASE_URL. They
+// Integration tests for the counter. They need a PostgreSQL database, set in NATRIUM_PIN_TEST_DATABASE_URL. They
 // are skipped without it and with -short:
 //
 //	docker run -d --rm -p 15433:5432 -e POSTGRES_PASSWORD=nrs -e POSTGRES_USER=nrs -e POSTGRES_DB=nrs postgres:17-alpine
-//	NATRIUM_RECOVERY_TEST_DATABASE_URL=postgres://nrs:nrs@localhost:15433/nrs go test ./internal/attempts/...
+//	NATRIUM_PIN_TEST_DATABASE_URL=postgres://nrs:nrs@localhost:15433/nrs go test ./internal/attempts/...
 package attempts_test
 
 import (
@@ -19,11 +19,11 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/stretchr/testify/require"
 
-	"github.com/SchwarzDigits/natrium-recovery-server/internal/attempts"
+	"github.com/SchwarzDigits/natrium-pin-service/internal/attempts"
 )
 
 const (
-	envTestDatabaseURL = "NATRIUM_RECOVERY_TEST_DATABASE_URL"
+	envTestDatabaseURL = "NATRIUM_PIN_TEST_DATABASE_URL"
 	domain             = "wire.example"
 	hour               = time.Hour
 	day                = 24 * time.Hour

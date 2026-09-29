@@ -11,7 +11,7 @@ import (
 	kms "github.com/stackitcloud/stackit-sdk-go/services/kms/v1api"
 )
 
-const userAgent = "natrium-recovery-server"
+const userAgent = "natrium-pin-service"
 
 // StackitConfig names a key of the STACKIT KMS (purpose symmetric_encrypt_decrypt, algorithm aes_256_gcm) and the
 // service account that may use it.

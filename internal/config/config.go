@@ -1,4 +1,4 @@
-// Package config reads the NATRIUM_RECOVERY_* environment variables of the command. No other package reads the
+// Package config reads the NATRIUM_PIN_* environment variables of the command. No other package reads the
 // environment. Load parses them into a server.Config, validates it and names the variable in every error.
 package config
 
@@ -9,38 +9,44 @@ import (
 	"os"
 	"strconv"
 
-	"github.com/SchwarzDigits/natrium-recovery-server/internal/masterkey"
-	"github.com/SchwarzDigits/natrium-recovery-server/server"
+	"github.com/SchwarzDigits/natrium-pin-service/internal/masterkey"
+	"github.com/SchwarzDigits/natrium-pin-service/server"
 )
 
 // Environment variable names.
 const (
-	EnvPort        = "NATRIUM_RECOVERY_PORT"
-	EnvLogLevel    = "NATRIUM_RECOVERY_LOG_LEVEL"
-	EnvWireAPIURL  = "NATRIUM_RECOVERY_WIRE_API_URL"
-	EnvDatabaseURL = "NATRIUM_RECOVERY_DATABASE_URL"
+	EnvPort     = "NATRIUM_PIN_PORT"
+	EnvLogLevel = "NATRIUM_PIN_LOG_LEVEL"
+	// EnvTokenJWKSURL, EnvTokenIssuer and EnvTokenAudience configure the check of the tokens of
+	// natrium-token-exchange.
+	EnvTokenJWKSURL  = "NATRIUM_PIN_TOKEN_JWKS_URL"
+	EnvTokenIssuer   = "NATRIUM_PIN_TOKEN_ISSUER"
+	EnvTokenAudience = "NATRIUM_PIN_TOKEN_AUDIENCE"
+	EnvDatabaseURL   = "NATRIUM_PIN_DATABASE_URL"
 	// EnvLimits is a comma-separated list of <attempts>/<window>, e.g. 5/1h,12/24h.
-	EnvLimits = "NATRIUM_RECOVERY_LIMITS"
+	EnvLimits = "NATRIUM_PIN_LIMITS"
 
-	EnvKMSProjectID = "NATRIUM_RECOVERY_KMS_PROJECT_ID"
-	EnvKMSRegion    = "NATRIUM_RECOVERY_KMS_REGION"
-	EnvKMSKeyRingID = "NATRIUM_RECOVERY_KMS_KEY_RING_ID"
-	EnvKMSKeyID     = "NATRIUM_RECOVERY_KMS_KEY_ID"
+	EnvKMSProjectID = "NATRIUM_PIN_KMS_PROJECT_ID"
+	EnvKMSRegion    = "NATRIUM_PIN_KMS_REGION"
+	EnvKMSKeyRingID = "NATRIUM_PIN_KMS_KEY_RING_ID"
+	EnvKMSKeyID     = "NATRIUM_PIN_KMS_KEY_ID"
 	// EnvKMSServiceAccountKey is the JSON key of the service account, not a path.
-	EnvKMSServiceAccountKey = "NATRIUM_RECOVERY_KMS_SERVICE_ACCOUNT_KEY"
+	EnvKMSServiceAccountKey = "NATRIUM_PIN_KMS_SERVICE_ACCOUNT_KEY"
 	// EnvMasterKeys is a comma-separated list of <keyVersion>:<kmsVersion>:<base64 ciphertext>.
-	EnvMasterKeys        = "NATRIUM_RECOVERY_MASTER_KEYS"
-	EnvCurrentKeyVersion = "NATRIUM_RECOVERY_CURRENT_KEY_VERSION"
+	EnvMasterKeys        = "NATRIUM_PIN_MASTER_KEYS"
+	EnvCurrentKeyVersion = "NATRIUM_PIN_CURRENT_KEY_VERSION"
 )
 
 const defaultPort = 8080
 
 // envOf maps the fields of server.Config to the variables that set them, for error messages.
 var envOf = map[string]string{
-	"Addr":        EnvPort,
-	"WireAPIURL":  EnvWireAPIURL,
-	"DatabaseURL": EnvDatabaseURL,
-	"Limits":      EnvLimits,
+	"Addr":          EnvPort,
+	"TokenJWKSURL":  EnvTokenJWKSURL,
+	"TokenIssuer":   EnvTokenIssuer,
+	"TokenAudience": EnvTokenAudience,
+	"DatabaseURL":   EnvDatabaseURL,
+	"Limits":        EnvLimits,
 
 	"KMSProjectID":         EnvKMSProjectID,
 	"KMSRegion":            EnvKMSRegion,
@@ -78,7 +84,9 @@ func Load() (Config, error) {
 		}
 	}
 
-	s.WireAPIURL = os.Getenv(EnvWireAPIURL)
+	s.TokenJWKSURL = os.Getenv(EnvTokenJWKSURL)
+	s.TokenIssuer = os.Getenv(EnvTokenIssuer)
+	s.TokenAudience = os.Getenv(EnvTokenAudience)
 	s.DatabaseURL = os.Getenv(EnvDatabaseURL)
 	if v := os.Getenv(EnvLimits); v != "" {
 		limits, err := server.ParseLimits(v)

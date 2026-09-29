@@ -13,11 +13,11 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/SchwarzDigits/natrium-recovery-server/internal/masterkey"
-	"github.com/SchwarzDigits/natrium-recovery-server/internal/masterkey/masterkeytest"
+	"github.com/SchwarzDigits/natrium-pin-service/internal/masterkey"
+	"github.com/SchwarzDigits/natrium-pin-service/internal/masterkey/masterkeytest"
 )
 
-const envTestDatabaseURL = "NATRIUM_RECOVERY_TEST_DATABASE_URL"
+const envTestDatabaseURL = "NATRIUM_PIN_TEST_DATABASE_URL"
 
 // closedAddr returns a local address that nothing listens on.
 func closedAddr(t *testing.T) string {
@@ -40,7 +40,9 @@ func valid(t *testing.T) Config {
 	t.Helper()
 	cfg := DefaultConfig()
 	cfg.Addr = ":8080"
-	cfg.WireAPIURL = "https://nginz-https.wire.example/v15"
+	cfg.TokenJWKSURL = "https://token.example/.well-known/jwks.json"
+	cfg.TokenIssuer = "https://token.example"
+	cfg.TokenAudience = "https://pin.example"
 	cfg.DatabaseURL = "postgres://recovery@db.example/recovery"
 	cfg.KMSProjectID = "project"
 	cfg.KMSRegion = "eu01"
@@ -52,7 +54,7 @@ func valid(t *testing.T) Config {
 	return cfg
 }
 
-// testDatabaseURL returns the test database from NATRIUM_RECOVERY_TEST_DATABASE_URL, and skips the test without it.
+// testDatabaseURL returns the test database from NATRIUM_PIN_TEST_DATABASE_URL, and skips the test without it.
 func testDatabaseURL(t *testing.T) string {
 	t.Helper()
 	if testing.Short() {
@@ -92,8 +94,10 @@ func TestValidateNamesTheField(t *testing.T) {
 		change func(*Config)
 	}{
 		{"Addr", func(c *Config) { c.Addr = "" }},
-		{"WireAPIURL", func(c *Config) { c.WireAPIURL = "" }},
-		{"WireAPIURL", func(c *Config) { c.WireAPIURL = "http://nginz-https.wire.example/v15" }},
+		{"TokenJWKSURL", func(c *Config) { c.TokenJWKSURL = "" }},
+		{"TokenJWKSURL", func(c *Config) { c.TokenJWKSURL = "http://token.example/.well-known/jwks.json" }},
+		{"TokenIssuer", func(c *Config) { c.TokenIssuer = "" }},
+		{"TokenAudience", func(c *Config) { c.TokenAudience = "" }},
 		{"DatabaseURL", func(c *Config) { c.DatabaseURL = "" }},
 		{"Limits", func(c *Config) { c.Limits = nil }},
 		{"Limits", func(c *Config) { c.Limits = []Limit{{Attempts: 0, Window: time.Hour}} }},
@@ -213,7 +217,9 @@ func TestRunServesUntilCanceled(t *testing.T) {
 	cfg := valid(t)
 	cfg.DatabaseURL = testDatabaseURL(t)
 	withMasterKeys(t, &cfg, kms, 1, 2)
-	r := start(t, cfg, dependencies{kms: kms})
+	deps := dependencies{kms: kms}
+	newFakeExchange(t).use(&cfg, &deps)
+	r := start(t, cfg, deps)
 
 	require.Eventually(t, func() bool { return get("http://"+r.addr+PathReady) == http.StatusOK },
 		10*time.Second, 20*time.Millisecond, "readiness probe must answer 200")
@@ -232,7 +238,9 @@ func TestRunIsNotReadyUntilTheMasterKeysAreLoaded(t *testing.T) {
 	cfg.DatabaseURL = testDatabaseURL(t)
 	withMasterKeys(t, &cfg, kms, 1)
 	kms.FailDecrypt(1)
-	r := start(t, cfg, dependencies{kms: kms})
+	deps := dependencies{kms: kms}
+	newFakeExchange(t).use(&cfg, &deps)
+	r := start(t, cfg, deps)
 
 	require.Eventually(t, func() bool { return get("http://"+r.addr+PathLive) == http.StatusOK },
 		10*time.Second, 20*time.Millisecond)
@@ -240,6 +248,26 @@ func TestRunIsNotReadyUntilTheMasterKeysAreLoaded(t *testing.T) {
 	// The first decrypt failed; the retry after one second succeeds.
 	require.Eventually(t, func() bool { return get("http://"+r.addr+PathReady) == http.StatusOK },
 		10*time.Second, 50*time.Millisecond)
+}
+
+func TestRunIsNotReadyUntilTheKeySetIsLoaded(t *testing.T) {
+	kms := masterkeytest.NewFakeKMS()
+	cfg := valid(t)
+	cfg.DatabaseURL = testDatabaseURL(t)
+	withMasterKeys(t, &cfg, kms, 1)
+	deps := dependencies{kms: kms}
+	exchange := newFakeExchange(t)
+	exchange.down.Store(true)
+	exchange.use(&cfg, &deps)
+	r := start(t, cfg, deps)
+
+	require.Eventually(t, func() bool { return get("http://"+r.addr+PathLive) == http.StatusOK },
+		10*time.Second, 20*time.Millisecond)
+	time.Sleep(200 * time.Millisecond)
+	require.Equal(t, http.StatusServiceUnavailable, get("http://"+r.addr+PathReady), "no key set yet")
+	exchange.down.Store(false)
+	require.Eventually(t, func() bool { return get("http://"+r.addr+PathReady) == http.StatusOK },
+		10*time.Second, 50*time.Millisecond, "the key set is fetched again with backoff")
 }
 
 func TestRunStopsOnAMasterKeyOfAnotherVersion(t *testing.T) {

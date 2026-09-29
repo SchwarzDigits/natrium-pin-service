@@ -1,9 +1,10 @@
-// Package server runs the recovery service of Natrium: the server side of an oblivious pseudorandom function
-// (RFC 9497) from which a client derives the key of its key file. The service limits the attempts per Wire user and
-// serves its API, the health probes and the metrics on one address.
+// Package server runs the PIN service of Natrium: the server side of an oblivious pseudorandom function
+// (RFC 9497) from which a client derives the key of its key file. Clients authenticate with a token of
+// natrium-token-exchange, which the service verifies offline. The service limits the attempts per Wire user and serves
+// its API, the health probes and the metrics on one address.
 //
 // Programs that read their configuration their own way build a Config, starting from DefaultConfig, and call Run.
-// The command in cmd/natrium-recovery-server reads it from NATRIUM_RECOVERY_* environment variables.
+// The command in cmd/natrium-pin-service reads it from NATRIUM_PIN_* environment variables.
 package server
 
 import (
@@ -18,11 +19,11 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/prometheus/client_golang/prometheus"
 
-	"github.com/SchwarzDigits/natrium-recovery-server/internal/attempts"
-	"github.com/SchwarzDigits/natrium-recovery-server/internal/httpapi"
-	"github.com/SchwarzDigits/natrium-recovery-server/internal/masterkey"
-	"github.com/SchwarzDigits/natrium-recovery-server/internal/platform"
-	"github.com/SchwarzDigits/natrium-recovery-server/internal/wireauth"
+	"github.com/SchwarzDigits/natrium-pin-service/internal/attempts"
+	"github.com/SchwarzDigits/natrium-pin-service/internal/httpapi"
+	"github.com/SchwarzDigits/natrium-pin-service/internal/masterkey"
+	"github.com/SchwarzDigits/natrium-pin-service/internal/platform"
+	"github.com/SchwarzDigits/natrium-pin-service/internal/tokenauth"
 )
 
 // Paths served on Config.Addr.
@@ -59,9 +60,14 @@ func ParseLimits(s string) ([]Limit, error) {
 type Config struct {
 	// Addr is the TCP address to listen on, e.g. ":8080". Required.
 	Addr string
-	// WireAPIURL is the base URL of the Wire API including the API version, e.g.
-	// https://nginz-https.wire.example/v15. The server checks every access token with GET /self there. Required.
-	WireAPIURL string
+	// TokenJWKSURL is the key set of natrium-token-exchange, e.g. https://token.example/.well-known/jwks.json. The
+	// server verifies every token with it. Required, https.
+	TokenJWKSURL string
+	// TokenIssuer is the iss the tokens must carry, the exchange's issuer, e.g. https://token.example. Required.
+	TokenIssuer string
+	// TokenAudience is this service's name, the aud the tokens must carry, e.g. https://pin.example. The exchange
+	// issues tokens for it under the audience "pin". Required.
+	TokenAudience string
 
 	// DatabaseURL is the PostgreSQL connection string. The attempts are counted there, so that all instances share
 	// them. Required: there is no store in memory.
@@ -113,8 +119,12 @@ func (c Config) Validate() error {
 	switch {
 	case c.Addr == "":
 		return invalid("Addr", "is required")
-	case c.WireAPIURL == "":
-		return invalid("WireAPIURL", "is required, e.g. https://nginz-https.wire.example/v15")
+	case c.TokenJWKSURL == "":
+		return invalid("TokenJWKSURL", "is required, e.g. https://token.example/.well-known/jwks.json")
+	case c.TokenIssuer == "":
+		return invalid("TokenIssuer", "is required, e.g. https://token.example")
+	case c.TokenAudience == "":
+		return invalid("TokenAudience", "is required, e.g. https://pin.example")
 	case c.DatabaseURL == "":
 		return invalid("DatabaseURL", "is required")
 	case c.KMSProjectID == "":
@@ -128,8 +138,8 @@ func (c Config) Validate() error {
 	case c.KMSServiceAccountKey == "":
 		return invalid("KMSServiceAccountKey", "is required")
 	}
-	if err := wireauth.CheckAPIURL(c.WireAPIURL); err != nil {
-		return invalid("WireAPIURL", "%v", err)
+	if err := tokenauth.CheckJWKSURL(c.TokenJWKSURL); err != nil {
+		return invalid("TokenJWKSURL", "%v", err)
 	}
 	if err := attempts.CheckLimits(c.Limits); err != nil {
 		return invalid("Limits", "%v", err)
@@ -169,8 +179,8 @@ func Run(ctx context.Context, cfg Config, log *slog.Logger) error {
 // dependencies are what Run creates from the configuration and tests replace with fakes.
 type dependencies struct {
 	kms masterkey.KMS
-	// wireHTTP is the HTTP client for the Wire backend. nil uses a client of its own.
-	wireHTTP *http.Client
+	// jwksHTTP is the HTTP client for the key set. nil uses a client of its own.
+	jwksHTTP *http.Client
 }
 
 func run(ctx context.Context, cfg Config, log *slog.Logger, deps dependencies) error {
@@ -199,10 +209,26 @@ func run(ctx context.Context, cfg Config, log *slog.Logger, deps dependencies) e
 	// error.
 	serveCtx, stopServing := context.WithCancel(ctx)
 	defer stopServing()
-	wire, err := wireauth.New(cfg.WireAPIURL, deps.wireHTTP)
+	tokens, err := tokenauth.New(tokenauth.Config{
+		JWKSURL:  cfg.TokenJWKSURL,
+		Issuer:   cfg.TokenIssuer,
+		Audience: cfg.TokenAudience,
+		HTTP:     deps.jwksHTTP,
+		Log:      log,
+	})
 	if err != nil {
-		return invalid("WireAPIURL", "%v", err)
+		return invalid("TokenJWKSURL", "%v", err)
 	}
+	tokensCtx, stopTokens := context.WithCancel(ctx)
+	tokensDone := make(chan struct{})
+	go func() {
+		defer close(tokensDone)
+		tokens.Run(tokensCtx)
+	}()
+	defer func() {
+		stopTokens()
+		<-tokensDone
+	}()
 	keys := masterkey.New(deps.kms, cfg.MasterKeys, cfg.CurrentKeyVersion, log)
 	loadErr := make(chan error, 1)
 	go func() {
@@ -215,24 +241,24 @@ func run(ctx context.Context, cfg Config, log *slog.Logger, deps dependencies) e
 
 	registry := platform.NewRegistry()
 	registry.MustRegister(prometheus.NewGaugeFunc(prometheus.GaugeOpts{
-		Name: "natrium_recovery_master_key_versions",
+		Name: "natrium_pin_master_key_versions",
 		Help: "Number of master key versions loaded.",
 	}, func() float64 { return float64(keys.Versions()) }))
 
 	mux := http.NewServeMux()
 	httpapi.New(httpapi.Options{
-		Auth:    wire,
+		Auth:    tokens,
 		Counter: counter,
 		Keys:    keys,
 		Log:     log,
 		Metrics: registry,
 	}).Register(mux)
 	mux.Handle("GET "+PathLive, platform.OKHandler())
-	mux.Handle("GET "+PathReady, platform.ReadyHandler(pool.Ping, keys.Ready))
+	mux.Handle("GET "+PathReady, platform.ReadyHandler(pool.Ping, keys.Ready, tokens.Ready))
 	mux.Handle("GET "+PathMetrics, platform.MetricsHandler(registry))
 
-	log.Info("starting server", "addr", cfg.Addr, "wire_api_url", cfg.WireAPIURL, "limits", fmt.Sprint(cfg.Limits),
-		"current_key_version", cfg.CurrentKeyVersion)
+	log.Info("starting server", "addr", cfg.Addr, "token_jwks_url", cfg.TokenJWKSURL, "token_issuer", cfg.TokenIssuer,
+		"token_audience", cfg.TokenAudience, "limits", fmt.Sprint(cfg.Limits), "current_key_version", cfg.CurrentKeyVersion)
 	serveErr := platform.Serve(serveCtx, log, cfg.Addr, platform.Recover(log, mux))
 
 	stopServing()

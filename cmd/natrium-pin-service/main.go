@@ -1,5 +1,5 @@
-// Command natrium-recovery-server runs the recovery service of Natrium. It reads its configuration from
-// NATRIUM_RECOVERY_* environment variables, logs JSON to stdout and shuts down gracefully on SIGINT and SIGTERM.
+// Command natrium-pin-service runs the PIN service of Natrium. It reads its configuration from
+// NATRIUM_PIN_* environment variables, logs JSON to stdout and shuts down gracefully on SIGINT and SIGTERM.
 package main
 
 import (
@@ -10,16 +10,16 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/SchwarzDigits/natrium-recovery-server/internal/config"
-	"github.com/SchwarzDigits/natrium-recovery-server/internal/platform"
-	"github.com/SchwarzDigits/natrium-recovery-server/server"
+	"github.com/SchwarzDigits/natrium-pin-service/internal/config"
+	"github.com/SchwarzDigits/natrium-pin-service/internal/platform"
+	"github.com/SchwarzDigits/natrium-pin-service/server"
 )
 
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	if err := run(ctx, os.Stdout); err != nil {
-		fmt.Fprintln(os.Stderr, "natrium-recovery-server:", err)
+		fmt.Fprintln(os.Stderr, "natrium-pin-service:", err)
 		os.Exit(1)
 	}
 }
