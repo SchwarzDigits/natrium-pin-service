@@ -115,10 +115,13 @@ func TestTheHourlyLimit(t *testing.T) {
 	counter := attempts.New(testPool(t), defaults)
 	user := newUser()
 	for i := 1; i <= 5; i++ {
-		require.True(t, take(t, counter, user).Allowed, "attempt %d", i)
+		d := take(t, counter, user)
+		require.True(t, d.Allowed, "attempt %d", i)
+		require.Equal(t, 5-i, d.Remaining, "attempts left after attempt %d", i)
 	}
 	d := take(t, counter, user)
 	require.False(t, d.Allowed)
+	require.Zero(t, d.Remaining)
 	require.Greater(t, d.RetryAfter, 59*time.Minute)
 	require.LessOrEqual(t, d.RetryAfter, hour)
 }
@@ -142,6 +145,27 @@ func TestTheDailyLimit(t *testing.T) {
 	require.False(t, d.Allowed)
 	require.Greater(t, d.RetryAfter, day-time.Minute, "the wait is until the day ends, not the hour")
 	require.LessOrEqual(t, d.RetryAfter, day)
+}
+
+// The attempts left follow the tightest limit.
+func TestRemainingFollowsTheTightestLimit(t *testing.T) {
+	pool := testPool(t)
+	counter := attempts.New(pool, defaults)
+	user := newUser()
+	for range 5 {
+		take(t, counter, user)
+	}
+	endWindow(t, pool, user, hour)
+	for range 5 {
+		take(t, counter, user)
+	}
+	endWindow(t, pool, user, hour)
+	d := take(t, counter, user)
+	require.True(t, d.Allowed)
+	require.Equal(t, 1, d.Remaining, "the 11th attempt of the day leaves 1, though the hour would leave 4")
+	d = take(t, counter, user)
+	require.True(t, d.Allowed)
+	require.Zero(t, d.Remaining)
 }
 
 // An attempt that is refused is not counted, in no window.

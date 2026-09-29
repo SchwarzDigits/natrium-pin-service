@@ -71,11 +71,13 @@ Content-Type: application/json
 Answer `200`:
 
 ```json
-{"keyVersion": 1, "evaluatedElement": "A+s+e/Kb3gwtURsqks/88WVfTfP1IEmKmXHTxwFg1Xu4"}
+{"keyVersion": 1, "evaluatedElement": "A+s+e/Kb3gwtURsqks/88WVfTfP1IEmKmXHTxwFg1Xu4", "attemptsRemaining": 4}
 ```
 
 `keyVersion` is the version used, which the client writes into a new key file. `evaluatedElement` is encoded like
-`blindedElement`.
+`blindedElement`. `attemptsRemaining` is how many more attempts the user has after this one before a limit is
+reached: the smallest number over all limits. The service cannot tell a right from a wrong PIN; a client whose
+decryption fails shows this number.
 
 Answers carry `Cache-Control: no-store`.
 
@@ -156,27 +158,32 @@ apply.
 - All instances of the service share the counts through PostgreSQL; deciding and counting are one transaction.
   `Retry-After` is computed from the database's clock.
 
-## Client side (Natrium)
+## Client side
 
-This part is implemented in Natrium. The service must match it.
+This part is implemented in Rust by the client library that Natrium builds on; Natrium only takes the PIN from the
+user and keeps the resulting bytes. The service must match it. The library checks the fixed values in
+`internal/evaluator/testdata/interop.json` in its own tests.
 
 **Export** (installation with intact storage, logged in):
 
-1. PIN: Unicode NFC, then UTF-8. Natrium requires at least 6 characters.
+1. PIN: Unicode NFC, then UTF-8. At least 6 characters.
 2. A PIN token from natrium-token-exchange (`{"audience": "pin"}`) with the current Wire access token.
 3. `Blind(pin)`, `POST /v1/evaluate` without `keyVersion`, `Finalize` gives `o` (32 bytes).
 4. `a = Argon2id(pin, salt, m = 64 MiB, t = 3, p = 1)` with a random salt. Argon2id stays: should the master keys
    leak, each guess is still expensive.
-5. `fileKey = HKDF-SHA256(ikm = o || a, info = "natrium-keyfile-v1")`.
-6. The secret is encrypted with AES-256-GCM. The associated data is the header and the user's qualified ID. The header,
-   in plaintext, holds an identifier, the format version, `keyVersion`, the Argon2 parameters, the salt and the nonce.
+5. `key = HKDF-SHA256(ikm = o || a, info = "sodium/v1/recovery-data")`.
+6. The secret is encrypted with AES-256-GCM. The header, in plaintext, holds the format version, `keyVersion`, the
+   Argon2 parameters, the salt, the nonce and the user's qualified ID; it is the associated data.
 
 **Restore** (empty browser):
 
 1. Log in to Wire, only to get tokens, without registering a client. The login comes before decrypting, because the
    PIN token needs a Wire access token.
-2. A PIN token from natrium-token-exchange (`{"audience": "pin"}`), without a key: the key comes out of the file.
-3. PIN, `POST /v1/evaluate` with `keyVersion` from the header, derive the file key, decrypt.
-4. If AES-GCM fails, the PIN was wrong. The attempt has been counted.
-5. `429` becomes a result of its own with the waiting time, `410` means the key file can no longer be opened. A `401`
+2. Compare the qualified ID in the header with the logged-in user; bytes of another user are refused before the
+   service is asked, so they cost no attempt.
+3. A PIN token from natrium-token-exchange (`{"audience": "pin"}`), without a key: the key comes out of the bytes.
+4. PIN, `POST /v1/evaluate` with `keyVersion` from the header, derive the key, decrypt.
+5. If AES-GCM fails, the PIN was wrong. The attempt has been counted; `attemptsRemaining` of the answer says how many
+   are left.
+6. `429` becomes a result of its own with the waiting time, `410` means the bytes can no longer be opened. A `401`
    after the PIN token expired (10 minutes by default) is answered with a new PIN token, not a new Wire login.

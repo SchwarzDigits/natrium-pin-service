@@ -44,7 +44,7 @@ sequenceDiagram
     P->>D: count the attempt for the user
     P->>P: evaluate with the user's key
     P-->>C: evaluated element
-    C->>C: finalize, combine with Argon2id(PIN), derive the file key
+    C->>C: finalize, combine with Argon2id(PIN), derive the key
 ```
 
 To make a key file, the client does this once and encrypts its secret with the file key. To open one after the browser
@@ -66,7 +66,9 @@ Content-Type: application/json
 
 `blindedElement` is a serialized element of P-256 (33 bytes, compressed) in standard base64 with padding.
 `keyVersion` is omitted when a new key file is made; the server then uses its current version. When a key file is
-opened, it is the version from the file. The answer is `{"keyVersion": 1, "evaluatedElement": "<base64>"}`.
+opened, it is the version from the file. The answer is
+`{"keyVersion": 1, "evaluatedElement": "<base64>", "attemptsRemaining": 4}`: `attemptsRemaining` is how many more
+attempts the user has before a limit is reached, so a client whose PIN turns out to be wrong can show it.
 
 Errors have the body `{"error": "<code>"}`:
 
@@ -176,7 +178,7 @@ its own setting in the message.
 |---|---|
 | Tests | `go test -race ./...`. The PostgreSQL tests also need `NATRIUM_PIN_TEST_DATABASE_URL`, e.g. `postgres://nrs:nrs@localhost:15433/nrs`, and are skipped without it |
 | Lint | `golangci-lint run` |
-| Interop | `cd interop && npm ci && node check.mjs` recomputes the client side of the fixed values in `internal/evaluator/testdata/interop.json` with `@noble/curves`, the library Natrium uses. `go test ./internal/evaluator -run TestInteropVectors` checks that the server still produces these values. Not part of CI |
+| Interop | `cd interop && npm ci && node check.mjs` recomputes the client side of the fixed values in `internal/evaluator/testdata/interop.json` with `@noble/curves`, an independent implementation. `go test ./internal/evaluator -run TestInteropVectors` checks that the server still produces these values. Not part of CI |
 | Against a server | `NATRIUM_PIN_URL=… NATRIUM_PIN_TOKEN=<PIN token> node interop/evaluate.mjs <pin>` runs the client side against a running server |
 
 ## Layout
