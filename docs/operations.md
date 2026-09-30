@@ -21,7 +21,8 @@ time.
 ## Access to the KMS
 
 The server authenticates with the JSON key of the service account, in `NATRIUM_PIN_KMS_SERVICE_ACCOUNT_KEY` (the
-value, not a path). The key must contain its private key, as a key created by STACKIT does. The server passes this
+value, not a path). The value is the JSON itself, or the JSON encoded in base64 (`base64 < key.json`), for platforms
+that cannot keep a JSON or multi-line value. The key must contain its private key, as a key created by STACKIT does. The server passes this
 private key to the STACKIT SDK explicitly; otherwise the SDK would prefer `STACKIT_PRIVATE_KEY`,
 `STACKIT_PRIVATE_KEY_PATH` or `~/.stackit/credentials.json`. The SDK still reads `STACKIT_TOKEN_BASEURL` if it is set.
 

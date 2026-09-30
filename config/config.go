@@ -33,7 +33,7 @@ const (
 	EnvKMSRegion    = "NATRIUM_PIN_KMS_REGION"
 	EnvKMSKeyRingID = "NATRIUM_PIN_KMS_KEY_RING_ID"
 	EnvKMSKeyID     = "NATRIUM_PIN_KMS_KEY_ID"
-	// EnvKMSServiceAccountKey is the JSON key of the service account, not a path.
+	// EnvKMSServiceAccountKey is the JSON key of the service account, not a path, as JSON or base64-encoded.
 	EnvKMSServiceAccountKey = "NATRIUM_PIN_KMS_SERVICE_ACCOUNT_KEY"
 	// EnvMasterKeys is a comma-separated list of <keyVersion>:<kmsVersion>:<base64 ciphertext>.
 	EnvMasterKeys        = "NATRIUM_PIN_MASTER_KEYS"

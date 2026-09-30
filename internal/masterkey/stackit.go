@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/stackitcloud/stackit-sdk-go/core/config"
 	kms "github.com/stackitcloud/stackit-sdk-go/services/kms/v1api"
@@ -20,13 +21,34 @@ type StackitConfig struct {
 	Region    string
 	KeyRingID string
 	KeyID     string
-	// ServiceAccountKey is the JSON key of the service account, including its private key.
+	// ServiceAccountKey is the JSON key of the service account, including its private key, as JSON or
+	// base64-encoded.
 	ServiceAccountKey string
 }
 
 type stackit struct {
 	api *kms.APIClient
 	cfg StackitConfig
+}
+
+// serviceAccountJSON returns the JSON key of the service account. The value is the JSON itself, or the JSON encoded
+// in base64, standard or URL alphabet, with or without padding and line breaks. Deployment platforms that cannot keep a
+// multi-line or JSON value intact store it as base64.
+func serviceAccountJSON(value string) (string, error) {
+	value = strings.TrimSpace(value)
+	if strings.HasPrefix(value, "{") {
+		return value, nil
+	}
+	compact := strings.Join(strings.Fields(value), "")
+	for _, encoding := range []*base64.Encoding{
+		base64.StdEncoding, base64.RawStdEncoding, base64.URLEncoding, base64.RawURLEncoding,
+	} {
+		decoded, err := encoding.DecodeString(compact)
+		if err == nil && strings.HasPrefix(strings.TrimSpace(string(decoded)), "{") {
+			return string(decoded), nil
+		}
+	}
+	return "", errors.New("the service account key is neither JSON nor base64-encoded JSON")
 }
 
 // NewStackit returns a KMS that uses the STACKIT KMS.
@@ -39,12 +61,16 @@ func newStackit(cfg StackitConfig, opts ...config.ConfigurationOption) (*stackit
 	// The SDK looks for a private key in STACKIT_PRIVATE_KEY, STACKIT_PRIVATE_KEY_PATH and ~/.stackit/credentials.json
 	// before it takes the one in the service account key. Passing it explicitly makes the service account key the
 	// only source.
+	serviceAccountKey, err := serviceAccountJSON(cfg.ServiceAccountKey)
+	if err != nil {
+		return nil, err
+	}
 	var key struct {
 		Credentials struct {
 			PrivateKey string `json:"privateKey"`
 		} `json:"credentials"`
 	}
-	if err := json.Unmarshal([]byte(cfg.ServiceAccountKey), &key); err != nil {
+	if err := json.Unmarshal([]byte(serviceAccountKey), &key); err != nil {
 		return nil, errors.New("the service account key is not JSON")
 	}
 	if key.Credentials.PrivateKey == "" {
@@ -53,7 +79,7 @@ func newStackit(cfg StackitConfig, opts ...config.ConfigurationOption) (*stackit
 	// Not config.WithRegion: this API takes the region per call and refuses it on the client.
 	options := append([]config.ConfigurationOption{
 		config.WithUserAgent(userAgent),
-		config.WithServiceAccountKey(cfg.ServiceAccountKey),
+		config.WithServiceAccountKey(serviceAccountKey),
 		config.WithPrivateKey(key.Credentials.PrivateKey),
 	}, opts...)
 	api, err := kms.NewAPIClient(options...)

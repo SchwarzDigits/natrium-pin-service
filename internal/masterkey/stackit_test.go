@@ -78,8 +78,33 @@ func TestStackitReportsErrors(t *testing.T) {
 	require.NotContains(t, err.Error(), base64.StdEncoding.EncodeToString([]byte("secret")))
 }
 
+func TestStackitTakesTheServiceAccountKeyAsBase64(t *testing.T) {
+	server := fakeStackit(t, http.StatusOK)
+	raw := []byte(testStackitConfig.ServiceAccountKey)
+	wrapped := base64.StdEncoding.EncodeToString(raw)
+	wrapped = wrapped[:20] + "\n" + wrapped[20:] + "\n"
+	for name, value := range map[string]string{
+		"standard":           base64.StdEncoding.EncodeToString(raw),
+		"without padding":    base64.RawStdEncoding.EncodeToString(raw),
+		"URL alphabet":       base64.URLEncoding.EncodeToString(raw),
+		"with line breaks":   wrapped,
+		"JSON with newlines": "\n  " + testStackitConfig.ServiceAccountKey + "\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			cfg := testStackitConfig
+			cfg.ServiceAccountKey = value
+			kms, err := newStackit(cfg, config.WithEndpoint(server.URL), config.WithoutAuthentication())
+			require.NoError(t, err)
+			ciphertext, err := kms.Encrypt(context.Background(), 3, []byte("abc"))
+			require.NoError(t, err)
+			require.Equal(t, []byte("cba"), ciphertext)
+		})
+	}
+}
+
 func TestStackitNeedsThePrivateKeyInTheServiceAccountKey(t *testing.T) {
-	for _, key := range []string{"", "not json", `{"credentials":{}}`} {
+	notJSON := base64.StdEncoding.EncodeToString([]byte("not json"))
+	for _, key := range []string{"", "not json", notJSON, `{"credentials":{}}`} {
 		cfg := testStackitConfig
 		cfg.ServiceAccountKey = key
 		_, err := NewStackit(cfg)
