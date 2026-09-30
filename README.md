@@ -188,7 +188,7 @@ its own setting in the message.
 | `cmd/natrium-pin-service` | the command: reads the environment and calls `server.Run` |
 | `cmd/new-master-key` | creates a master key and prints only its KMS ciphertext |
 | `server` | `Config`, `Validate` and `Run`, the public API |
-| `internal/config` | the environment variables of the command |
+| `config` | the environment variables of the command. `LoadFrom` and `LoadKMSFrom` read them through a function, for programs that receive the settings under other names |
 | `internal/httpapi` | `POST /v1/evaluate`: order of the checks, error codes, CORS, logs and metrics |
 | `internal/attempts` | the attempt counter in PostgreSQL and its migrations |
 | `internal/masterkey` | the master keys: KMS, loading with backoff, locked memory |

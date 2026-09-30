@@ -1,5 +1,8 @@
 // Package config reads the NATRIUM_PIN_* environment variables of the command. No other package reads the
 // environment. Load parses them into a server.Config, validates it and names the variable in every error.
+//
+// A program that receives the settings under other names, e.g. from a platform, calls LoadFrom and LoadKMSFrom with a
+// function that translates the names.
 package config
 
 import (
@@ -65,11 +68,16 @@ type Config struct {
 
 // Load reads and validates the environment variables.
 func Load() (Config, error) {
+	return LoadFrom(os.Getenv)
+}
+
+// LoadFrom reads and validates the variables through getenv, which returns "" for an unset variable.
+func LoadFrom(getenv func(string) string) (Config, error) {
 	cfg := Config{Server: server.DefaultConfig(), LogLevel: slog.LevelInfo}
 	s := &cfg.Server
 
 	port := defaultPort
-	if v := os.Getenv(EnvPort); v != "" {
+	if v := getenv(EnvPort); v != "" {
 		n, err := strconv.Atoi(v)
 		if err != nil || n < 1 || n > 65535 {
 			return Config{}, fmt.Errorf("%s: must be a port from 1 to 65535, got %q", EnvPort, v)
@@ -78,17 +86,17 @@ func Load() (Config, error) {
 	}
 	s.Addr = fmt.Sprintf(":%d", port)
 
-	if v := os.Getenv(EnvLogLevel); v != "" {
+	if v := getenv(EnvLogLevel); v != "" {
 		if err := cfg.LogLevel.UnmarshalText([]byte(v)); err != nil {
 			return Config{}, fmt.Errorf("%s: %w", EnvLogLevel, err)
 		}
 	}
 
-	s.TokenJWKSURL = os.Getenv(EnvTokenJWKSURL)
-	s.TokenIssuer = os.Getenv(EnvTokenIssuer)
-	s.TokenAudience = os.Getenv(EnvTokenAudience)
-	s.DatabaseURL = os.Getenv(EnvDatabaseURL)
-	if v := os.Getenv(EnvLimits); v != "" {
+	s.TokenJWKSURL = getenv(EnvTokenJWKSURL)
+	s.TokenIssuer = getenv(EnvTokenIssuer)
+	s.TokenAudience = getenv(EnvTokenAudience)
+	s.DatabaseURL = getenv(EnvDatabaseURL)
+	if v := getenv(EnvLimits); v != "" {
 		limits, err := server.ParseLimits(v)
 		if err != nil {
 			return Config{}, fmt.Errorf("%s: %w", EnvLimits, err)
@@ -96,17 +104,17 @@ func Load() (Config, error) {
 		s.Limits = limits
 	}
 
-	kms := loadKMS()
+	kms := loadKMS(getenv)
 	s.KMSProjectID, s.KMSRegion, s.KMSKeyRingID, s.KMSKeyID = kms.ProjectID, kms.Region, kms.KeyRingID, kms.KeyID
 	s.KMSServiceAccountKey = kms.ServiceAccountKey
-	if v := os.Getenv(EnvMasterKeys); v != "" {
+	if v := getenv(EnvMasterKeys); v != "" {
 		keys, err := server.ParseMasterKeys(v)
 		if err != nil {
 			return Config{}, fmt.Errorf("%s: %w", EnvMasterKeys, err)
 		}
 		s.MasterKeys = keys
 	}
-	if v := os.Getenv(EnvCurrentKeyVersion); v != "" {
+	if v := getenv(EnvCurrentKeyVersion); v != "" {
 		n, err := strconv.ParseUint(v, 10, 32)
 		if err != nil {
 			return Config{}, fmt.Errorf("%s: must be a key version, got %q", EnvCurrentKeyVersion, v)
@@ -122,7 +130,12 @@ func Load() (Config, error) {
 
 // LoadKMS reads the variables that name the KMS key and the service account, for cmd/new-master-key. All are required.
 func LoadKMS() (masterkey.StackitConfig, error) {
-	kms := loadKMS()
+	return LoadKMSFrom(os.Getenv)
+}
+
+// LoadKMSFrom is LoadKMS with the variables read through getenv.
+func LoadKMSFrom(getenv func(string) string) (masterkey.StackitConfig, error) {
+	kms := loadKMS(getenv)
 	for _, v := range []struct{ name, value string }{
 		{EnvKMSProjectID, kms.ProjectID},
 		{EnvKMSRegion, kms.Region},
@@ -137,13 +150,13 @@ func LoadKMS() (masterkey.StackitConfig, error) {
 	return kms, nil
 }
 
-func loadKMS() masterkey.StackitConfig {
+func loadKMS(getenv func(string) string) masterkey.StackitConfig {
 	return masterkey.StackitConfig{
-		ProjectID:         os.Getenv(EnvKMSProjectID),
-		Region:            os.Getenv(EnvKMSRegion),
-		KeyRingID:         os.Getenv(EnvKMSKeyRingID),
-		KeyID:             os.Getenv(EnvKMSKeyID),
-		ServiceAccountKey: os.Getenv(EnvKMSServiceAccountKey),
+		ProjectID:         getenv(EnvKMSProjectID),
+		Region:            getenv(EnvKMSRegion),
+		KeyRingID:         getenv(EnvKMSKeyRingID),
+		KeyID:             getenv(EnvKMSKeyID),
+		ServiceAccountKey: getenv(EnvKMSServiceAccountKey),
 	}
 }
 

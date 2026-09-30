@@ -8,7 +8,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/SchwarzDigits/natrium-pin-service/internal/config"
+	"github.com/SchwarzDigits/natrium-pin-service/config"
 	"github.com/SchwarzDigits/natrium-pin-service/server"
 )
 

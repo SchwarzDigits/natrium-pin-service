@@ -16,7 +16,7 @@ import (
 	"io"
 	"os"
 
-	"github.com/SchwarzDigits/natrium-pin-service/internal/config"
+	"github.com/SchwarzDigits/natrium-pin-service/config"
 	"github.com/SchwarzDigits/natrium-pin-service/internal/masterkey"
 )
 
