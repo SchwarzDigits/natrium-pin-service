@@ -140,7 +140,7 @@ server stops with an error.
 | `NATRIUM_PIN_DATABASE_URL` | yes | | PostgreSQL connection string. There is no store in memory |
 | `NATRIUM_PIN_LIMITS` | no | `5/1h,12/24h` | attempts per user and window, comma-separated `<attempts>/<window>`. An attempt must be within every limit. Windows of at least `1s` |
 | `NATRIUM_PIN_KMS_PROJECT_ID`, `_KMS_REGION`, `_KMS_KEY_RING_ID`, `_KMS_KEY_ID` | yes | | the STACKIT KMS key that encrypts the master keys, e.g. region `eu01` |
-| `NATRIUM_PIN_KMS_SERVICE_ACCOUNT_KEY` | yes | | the JSON key of a service account that may use the KMS key, including its private key. The value, not a path |
+| `NATRIUM_PIN_KMS_SERVICE_ACCOUNT_KEY` | yes | | the JSON key of a service account that may use the KMS key, including its private key. The value, not a path: the JSON itself or the JSON in base64, for platforms that cannot keep a JSON or multi-line value |
 | `NATRIUM_PIN_MASTER_KEYS` | yes | | the active master keys, comma-separated, each `<keyVersion>:<kmsVersion>:<base64 ciphertext>` as printed by `new-master-key` |
 | `NATRIUM_PIN_CURRENT_KEY_VERSION` | yes | | the version for new key files, one of `MASTER_KEYS` |
 | `NATRIUM_PIN_LOG_LEVEL` | no | `info` | `debug`, `info`, `warn` or `error` |
