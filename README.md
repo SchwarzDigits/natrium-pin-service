@@ -3,7 +3,8 @@
 The PIN service of [Natrium](https://github.com/SchwarzDigits/natrium). Natrium protects a user's key file with a short
 PIN. The key of the file is derived from the PIN and a secret of this service, through an oblivious pseudorandom
 function (OPRF, RFC 9497, `P256-SHA256`). Every guess at the PIN needs a request to this service, the service limits
-the requests per Wire user, and it sees neither the PIN nor the result.
+the requests per Wire user, and it sees neither the PIN nor the result. A client that opened the file gives its
+attempt back with a signed receipt, so only wrong guesses stay counted.
 
 Status: works and is tested, not yet in production use. Versions are 0.x: the API can still change, but not the
 derivation of the keys, which existing key files depend on.
@@ -18,10 +19,12 @@ This service makes every guess at the PIN a request to a server that counts:
 
 - **No offline search.** The key of a file depends on a secret of this service. Whoever has the file still needs the
   service for every guess, and gets 5 guesses per hour and 12 per day and user by default.
-- **Blind.** The client blinds the PIN before sending it (OPRF). The service sees neither the PIN nor the key, and does
-  not learn whether a guess was right.
-- **Per user.** The service derives a key of its own for every Wire user from its master key. A file of one user
-  cannot be guessed at with another user's token.
+- **Blind.** The client blinds the PIN before sending it (OPRF). The service sees neither the PIN nor the key.
+- **Receipts.** A client that opened or made a key file signs a receipt with a key that only the file's secret yields,
+  and the service gives the attempt back. A wrong guess has no such signature and stays counted.
+- **Per key file.** The service derives a key of its own for every key file of a Wire user from its master key, with
+  the file's public receipt key. A file of one user cannot be guessed at with another user's token, and an answer for
+  one file is of no use for another.
 - **No Wire token here.** Clients authenticate with a short-lived token of
   [natrium-token-exchange](https://github.com/SchwarzDigits/natrium-token-exchange), which the service verifies
   offline. It never holds a Wire access token, which would act for the user at Wire.
@@ -61,27 +64,45 @@ POST /v1/evaluate
 Authorization: Bearer <PIN token of natrium-token-exchange>
 Content-Type: application/json
 
-{"keyVersion": 1, "blindedElement": "<base64>"}
+{"keyVersion": 1, "refundKey": "<base64>", "blindedElement": "<base64>"}
 ```
 
 `blindedElement` is a serialized element of P-256 (33 bytes, compressed) in standard base64 with padding.
-`keyVersion` is omitted when a new key file is made; the server then uses its current version. When a key file is
-opened, it is the version from the file. The answer is
-`{"keyVersion": 1, "evaluatedElement": "<base64>", "attemptsRemaining": 4}`: `attemptsRemaining` is how many more
-attempts the user has before a limit is reached, so a client whose PIN turns out to be wrong can show it.
+`refundKey` is the key file's public Ed25519 key for receipts (32 bytes), from the secret of a new file or from the
+header of an existing one. `keyVersion` is omitted when a new key file is made; the server then uses its current
+version. When a key file is opened, it is the version from the file. The answer is
+`{"keyVersion": 1, "evaluatedElement": "<base64>", "attemptsRemaining": 4, "attemptId": "<base64>"}`:
+`attemptsRemaining` is how many more attempts the user has before a limit is reached, so a client whose PIN turns
+out to be wrong can show it.
+
+```
+POST /v1/refund
+Authorization: Bearer <PIN token of natrium-token-exchange>
+Content-Type: application/json
+
+{"attemptId": "<base64>", "signature": "<base64>"}
+```
+
+After it opened or made the key file, the client signs the attempt with the key file's private receipt key, and the
+service gives the attempt back: `{"attemptsRemaining": 5}`. Within 15 minutes, once per attempt. See
+[docs/protocol.md](docs/protocol.md#receipts).
 
 Errors have the body `{"error": "<code>"}`:
 
 | Status | Code | When | Counted |
 |---|---|---|---|
-| 400 | `bad_request` | not one JSON object with known fields, more than 1 KiB, no valid element | no |
+| 400 | `bad_request` | not one JSON object with known fields, more than 1 KiB, no valid element or refund key | no |
 | 401 | `unauthorized` | no Bearer token, or the token is not accepted: wrong signature, issuer or audience, expired | no |
 | 410 | `key_version_unavailable` | the key version is not active | no |
 | 429 | `too_many_attempts` | a limit is reached; `Retry-After` gives the seconds until the attempt would be allowed | no |
 | 503 | `unavailable` | the master keys or the exchange's key set are not loaded, or the database cannot be reached | no |
 | 500 | `internal` | an error in the server | only if it occurs in the evaluation |
 
-The server checks in this order: master keys loaded, token, body and element, key version, limits, evaluate. By
+For `/v1/refund` there are also `404 unknown_attempt` (no open attempt of the user with that ID) and
+`403 invalid_signature`.
+
+The server checks in this order: master keys loaded, token, body, refund key and element, key version, limits,
+evaluate. By
 default a user has 5 attempts per hour and 12 per day. Only an attempt within all limits is counted and evaluated.
 Pages of any origin may call the API (CORS with `*`, without credentials): the token is set by the client in the
 header, not added by the browser.
@@ -89,9 +110,10 @@ header, not added by the browser.
 The token is a JWT of natrium-token-exchange for the audience `pin`. The server verifies it offline with the
 exchange's key set: EdDSA, `iss`, `aud`, `exp`, `nbf` and `iat`. The user is the qualified ID in `sub`.
 
-The key of a user is derived from the master key with `DeriveKeyPair` of RFC 9497 and the info string
-`natrium-recovery-v1|<domain>|<user ID>|0`, from the user's qualified ID. The info string keeps its first name: it is
-part of the derivation, and changing it would make every key file unreadable.
+The key of a key file is derived from the master key with `DeriveKeyPair` of RFC 9497 and the info string
+`natrium-recovery-v2|<domain>|<user ID>|0|<refund key>`, from the user's qualified ID and the file's public receipt
+key. The info string is part of the derivation: changing it makes every key file unreadable. Version 2 replaced
+version 1 before production use, without migration.
 
 ## Running
 
