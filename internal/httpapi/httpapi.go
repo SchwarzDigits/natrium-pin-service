@@ -169,8 +169,8 @@ type evaluateResponse struct {
 	// AttemptsRemaining is how many more attempts the user has before a limit is reached. A client whose PIN turns
 	// out to be wrong can show it.
 	AttemptsRemaining int `json:"attemptsRemaining"`
-	// AttemptID names the attempt for its receipt, in standard base64 with padding.
-	AttemptID string `json:"attemptId"`
+	// AttemptID names the attempt for its receipt, in standard base64 with padding. Absent without receipt key.
+	AttemptID string `json:"attemptId,omitempty"`
 }
 
 type refundRequest struct {
@@ -232,7 +232,7 @@ func (h *Handler) serve(w http.ResponseWriter, r *http.Request) outcome {
 		o.result = resultBadRequest
 		return o
 	}
-	info, err := evaluator.Info(user.Domain, user.ID, epoch, refundKey)
+	info, err := infoOf(user, refundKey)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, codeInternal)
 		o.result, o.err = resultInternal, err
@@ -269,14 +269,27 @@ func (h *Handler) serve(w http.ResponseWriter, r *http.Request) outcome {
 		o.result, o.err = resultInternal, err
 		return o
 	}
-	writeJSON(w, http.StatusOK, evaluateResponse{
+	response := evaluateResponse{
 		KeyVersion:        o.keyVersion,
 		EvaluatedElement:  base64.StdEncoding.EncodeToString(evaluated),
 		AttemptsRemaining: decision.Remaining,
-		AttemptID:         base64.StdEncoding.EncodeToString(decision.AttemptID),
-	})
+	}
+	if decision.AttemptID != nil {
+		response.AttemptID = base64.StdEncoding.EncodeToString(decision.AttemptID)
+	}
+	writeJSON(w, http.StatusOK, response)
 	o.result = resultOK
 	return o
+}
+
+// infoOf returns the info string for the user's key files of refundKey. Without refundKey, from a client that sends
+// none yet, it is the info string of version 1, which its key files were made with. That path will be removed once
+// the clients send receipt keys.
+func infoOf(user tokenauth.QualifiedID, refundKey []byte) ([]byte, error) {
+	if refundKey == nil {
+		return evaluator.LegacyInfo(user.Domain, user.ID, epoch)
+	}
+	return evaluator.Info(user.Domain, user.ID, epoch, refundKey)
 }
 
 // authenticate checks the bearer token. If it fails, it has answered the request and returns the outcome.
@@ -363,8 +376,8 @@ func bearerToken(r *http.Request) (string, bool) {
 }
 
 // readRequest decodes the body strictly: one JSON object with known fields and nothing after it, a key version from 1
-// if present, a receipt key that is a compressed point of P-256 and a blinded element that is a valid point, both in
-// standard base64 with padding.
+// if present, a receipt key that is a compressed point of P-256 if present, and a blinded element that is a valid
+// point, both in standard base64 with padding. Without receipt key, the returned key is nil.
 func readRequest(w http.ResponseWriter, r *http.Request) (evaluateRequest, []byte, evaluator.Element, error) {
 	var req evaluateRequest
 	if err := decodeBody(w, r, &req); err != nil {
@@ -373,15 +386,16 @@ func readRequest(w http.ResponseWriter, r *http.Request) (evaluateRequest, []byt
 	if req.KeyVersion != nil && *req.KeyVersion == 0 {
 		return evaluateRequest{}, nil, evaluator.Element{}, errors.New("key versions start at 1")
 	}
-	if req.RefundKey == nil {
-		return evaluateRequest{}, nil, evaluator.Element{}, errors.New("refundKey is missing")
-	}
-	refundKey, err := base64.StdEncoding.Strict().DecodeString(*req.RefundKey)
-	if err != nil {
-		return evaluateRequest{}, nil, evaluator.Element{}, err
-	}
-	if _, err := receipt.ParseKey(refundKey); err != nil {
-		return evaluateRequest{}, nil, evaluator.Element{}, err
+	var refundKey []byte
+	if req.RefundKey != nil {
+		key, err := base64.StdEncoding.Strict().DecodeString(*req.RefundKey)
+		if err != nil {
+			return evaluateRequest{}, nil, evaluator.Element{}, err
+		}
+		if _, err := receipt.ParseKey(key); err != nil {
+			return evaluateRequest{}, nil, evaluator.Element{}, err
+		}
+		refundKey = key
 	}
 	if req.BlindedElement == nil {
 		return evaluateRequest{}, nil, evaluator.Element{}, errors.New("blindedElement is missing")
