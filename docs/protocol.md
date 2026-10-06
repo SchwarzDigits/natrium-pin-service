@@ -72,7 +72,7 @@ Content-Type: application/json
 | Field | Meaning |
 |---|---|
 | `keyVersion` | Optional, a number from 1. Omitted when a new key file is made: the server then uses its current version. When a key file is opened, the version from the file. |
-| `refundKey` | The public key of the key file's receipts (see Transition when it is absent): a compressed SEC1 point of P-256, 33 bytes in standard base64 with padding. A new key file: the key the client derived from its secret (see Receipts); an existing one: the key from its header. |
+| `refundKey` | Required. The public key of the key file's receipts: a compressed SEC1 point of P-256, 33 bytes in standard base64 with padding. A new key file: the key the client derived from its secret (see Receipts); an existing one: the key from its header. |
 | `blindedElement` | `SerializeElement` of RFC 9497: the compressed SEC1 point of P-256, 33 bytes, in standard base64 (RFC 4648, section 4) with padding. For 33 bytes that is 44 characters without `=`. |
 
 Answer `200`:
@@ -94,7 +94,7 @@ The body is always `{"error": "<code>"}`.
 
 | Status | Code | When | Counted |
 |---|---|---|---|
-| 400 | `bad_request` | The body is larger than 1 KiB, is not exactly one JSON object, has unknown fields, `keyVersion` is not a number from 1, `refundKey` is not standard base64 with padding, is not 33 bytes or is not a compressed point of P-256, `blindedElement` is missing, is not standard base64 with padding, is not 33 bytes, is not a point of P-256 or is the identity. | no |
+| 400 | `bad_request` | The body is larger than 1 KiB, is not exactly one JSON object, has unknown fields, `keyVersion` is not a number from 1, `refundKey` is missing, is not standard base64 with padding, is not 33 bytes or is not a compressed point of P-256, `blindedElement` is missing, is not standard base64 with padding, is not 33 bytes, is not a point of P-256 or is the identity. | no |
 | 401 | `unauthorized` | The header `Authorization: Bearer <token>` is missing, or the token is not accepted (see Authentication). The answer carries `WWW-Authenticate: Bearer`. | no |
 | 410 | `key_version_unavailable` | The key version is not one of the active versions. | no |
 | 429 | `too_many_attempts` | The user has reached a limit. `Retry-After` gives the seconds until the attempt would be allowed, rounded up: until the end of the last window whose limit is reached. | no |
@@ -197,13 +197,6 @@ apply.
   12 per day.
 - All instances of the service share the counts through PostgreSQL; deciding and counting are one transaction.
   `Retry-After` is computed from the database's clock.
-
-### Transition
-
-Clients that do not send `refundKey` yet keep working until they have moved: a request without it is evaluated with
-the info string of version 1, `"natrium-recovery-v1|" + domain + "|" + userId + "|" + epoch`, which their key files
-were made with, and its answer has no `attemptId`. Such an attempt is counted and cannot be given back. This path will
-be removed once the clients send receipt keys.
 
 ## Receipts
 

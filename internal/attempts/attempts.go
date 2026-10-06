@@ -205,7 +205,7 @@ type Decision struct {
 	// ends. It is 0 for an attempt that is not allowed.
 	Remaining int
 	// AttemptID names an allowed attempt for its receipt, AttemptIDSize random bytes. Nil for an attempt that is
-	// not allowed or was taken without receipt key.
+	// not allowed.
 	AttemptID []byte
 }
 
@@ -228,8 +228,8 @@ func New(pool *pgxpool.Pool, limits []Limit) *Counter {
 }
 
 // Take decides whether an attempt of the user with the given domain and ID (a UUID) is within all limits, and if so,
-// counts it in all windows and keeps it open for a receipt by refundKey. Without refundKey, from a client that sends
-// none yet, the attempt is counted but cannot be given back. An attempt that is not allowed is not counted. Deciding and counting are one transaction, so concurrent attempts, also from other instances, never exceed
+// counts it in all windows and keeps it open for a receipt by refundKey. An attempt that is not allowed is not
+// counted. Deciding and counting are one transaction, so concurrent attempts, also from other instances, never exceed
 // a limit together.
 func (c *Counter) Take(ctx context.Context, domain, userID string, refundKey []byte) (Decision, error) {
 	var decision Decision
@@ -261,9 +261,6 @@ func (c *Counter) Take(ctx context.Context, domain, userID string, refundKey []b
 		}
 		if _, err := tx.Exec(ctx, countAttempt, domain, userID, c.windows); err != nil {
 			return err
-		}
-		if refundKey == nil {
-			return nil
 		}
 		windowEnds := make([]time.Time, len(c.windows))
 		for i, w := range c.windows {
