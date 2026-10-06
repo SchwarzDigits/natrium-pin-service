@@ -29,6 +29,7 @@ import (
 // Paths served on Config.Addr.
 const (
 	PathEvaluate = httpapi.PathEvaluate
+	PathRefund   = httpapi.PathRefund
 	PathLive     = platform.PathLive
 	PathReady    = platform.PathReady
 	PathMetrics  = platform.PathMetrics

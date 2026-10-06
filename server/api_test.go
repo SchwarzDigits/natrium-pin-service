@@ -1,8 +1,11 @@
 package server
 
 import (
+	"crypto/ecdsa"
 	"crypto/ed25519"
+	"crypto/elliptic"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -20,6 +23,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/SchwarzDigits/natrium-pin-service/internal/masterkey/masterkeytest"
+	"github.com/SchwarzDigits/natrium-pin-service/internal/receipt"
 )
 
 const (
@@ -90,6 +94,30 @@ func evaluate(t *testing.T, addr, token, pin string) (int, string, []byte) {
 
 // evaluateCounting is evaluate that also returns the attempts left of a 200 answer.
 func evaluateCounting(t *testing.T, addr, token, pin string) (int, string, []byte, int) {
+	status, retryAfter, output, left, _ := evaluateAttempt(t, addr, token, pin)
+	return status, retryAfter, output, left
+}
+
+// receiptKey is the receipt key pair of the key files in these tests.
+var receiptKey = func() *ecdsa.PrivateKey {
+	k, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		panic(err)
+	}
+	return k
+}()
+
+// compressedReceiptKey returns the public receipt key, compressed, in standard base64.
+func compressedReceiptKey(t *testing.T) string {
+	t.Helper()
+	public, err := receiptKey.PublicKey.Bytes()
+	require.NoError(t, err)
+	x, y := elliptic.Unmarshal(elliptic.P256(), public) //nolint:staticcheck // only to compress the test key
+	return base64.StdEncoding.EncodeToString(elliptic.MarshalCompressed(elliptic.P256(), x, y))
+}
+
+// evaluateAttempt is evaluateCounting that also returns the attempt ID of a 200 answer.
+func evaluateAttempt(t *testing.T, addr, token, pin string) (int, string, []byte, int, string) {
 	t.Helper()
 	client := oprf.NewClient(oprf.SuiteP256)
 	finalize, request, err := client.Blind([][]byte{[]byte(pin)})
@@ -97,7 +125,8 @@ func evaluateCounting(t *testing.T, addr, token, pin string) (int, string, []byt
 	blinded, err := request.Elements[0].MarshalBinaryCompress()
 	require.NoError(t, err)
 
-	body := `{"blindedElement":"` + base64.StdEncoding.EncodeToString(blinded) + `"}`
+	body := `{"refundKey":"` + compressedReceiptKey(t) + `","blindedElement":"` +
+		base64.StdEncoding.EncodeToString(blinded) + `"}`
 	req, err := http.NewRequest(http.MethodPost, "http://"+addr+PathEvaluate, strings.NewReader(body))
 	require.NoError(t, err)
 	req.Header.Set("Authorization", "Bearer "+token)
@@ -107,13 +136,14 @@ func evaluateCounting(t *testing.T, addr, token, pin string) (int, string, []byt
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		_, _ = io.Copy(io.Discard, resp.Body)
-		return resp.StatusCode, resp.Header.Get("Retry-After"), nil, 0
+		return resp.StatusCode, resp.Header.Get("Retry-After"), nil, 0, ""
 	}
 
 	var answer struct {
 		KeyVersion        uint32 `json:"keyVersion"`
 		EvaluatedElement  string `json:"evaluatedElement"`
 		AttemptsRemaining int    `json:"attemptsRemaining"`
+		AttemptID         string `json:"attemptId"`
 	}
 	require.NoError(t, json.NewDecoder(resp.Body).Decode(&answer))
 	evaluated, err := base64.StdEncoding.DecodeString(answer.EvaluatedElement)
@@ -122,7 +152,34 @@ func evaluateCounting(t *testing.T, addr, token, pin string) (int, string, []byt
 	require.NoError(t, e.UnmarshalBinary(evaluated))
 	outputs, err := client.Finalize(finalize, &oprf.Evaluation{Elements: []oprf.Evaluated{e}})
 	require.NoError(t, err)
-	return resp.StatusCode, "", outputs[0], answer.AttemptsRemaining
+	return resp.StatusCode, "", outputs[0], answer.AttemptsRemaining, answer.AttemptID
+}
+
+// refund sends the receipt for attemptID of userID to the server at addr and returns the status and the attempts
+// left of a 200 answer.
+func refund(t *testing.T, addr, token, userID, attemptID string) (int, int) {
+	t.Helper()
+	digest := sha256.Sum256(receipt.Message("wire.example", userID, attemptID))
+	r, s, err := ecdsa.Sign(rand.Reader, receiptKey, digest[:])
+	require.NoError(t, err)
+	signature := make([]byte, receipt.SignatureSize)
+	r.FillBytes(signature[:32])
+	s.FillBytes(signature[32:])
+	body := `{"attemptId":"` + attemptID + `","signature":"` + base64.StdEncoding.EncodeToString(signature) + `"}`
+	req, err := http.NewRequest(http.MethodPost, "http://"+addr+PathRefund, strings.NewReader(body))
+	require.NoError(t, err)
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	defer func() { _ = resp.Body.Close() }()
+	var answer struct {
+		AttemptsRemaining int `json:"attemptsRemaining"`
+	}
+	if resp.StatusCode == http.StatusOK {
+		require.NoError(t, json.NewDecoder(resp.Body).Decode(&answer))
+	}
+	return resp.StatusCode, answer.AttemptsRemaining
 }
 
 // Two instances at one database: they give the same output for the same PIN, and together they allow 5 attempts per
@@ -165,4 +222,41 @@ func TestTwoInstancesShareTheLimit(t *testing.T) {
 
 	status, _, _ = evaluate(t, instances[1].addr, "not-a-token", "123456")
 	require.Equal(t, http.StatusUnauthorized, status)
+}
+
+// A receipt sent to one instance gives back an attempt counted by another: after the limit, a receipt makes room for
+// one more attempt.
+func TestReceiptGivesTheAttemptBackAcrossInstances(t *testing.T) {
+	kms := masterkeytest.NewFakeKMS()
+	exchange := newFakeExchange(t)
+	cfg := valid(t)
+	cfg.DatabaseURL = testDatabaseURL(t)
+	withMasterKeys(t, &cfg, kms, 1)
+	deps := dependencies{kms: kms}
+	exchange.use(&cfg, &deps)
+	instances := []*running{start(t, cfg, deps), start(t, cfg, deps)}
+	for _, r := range instances {
+		require.Eventually(t, func() bool { return get("http://"+r.addr+PathReady) == http.StatusOK },
+			10*time.Second, 20*time.Millisecond)
+	}
+
+	userID := newUserID()
+	token := exchange.token(t, userID)
+	var last string
+	for i := range 5 {
+		status, _, _, _, attemptID := evaluateAttempt(t, instances[0].addr, token, "123456")
+		require.Equal(t, http.StatusOK, status, "attempt %d", i+1)
+		last = attemptID
+	}
+	status, _, _ := evaluate(t, instances[0].addr, token, "123456")
+	require.Equal(t, http.StatusTooManyRequests, status)
+
+	status, left := refund(t, instances[1].addr, token, userID, last)
+	require.Equal(t, http.StatusOK, status)
+	require.Equal(t, 1, left)
+	status, _ = refund(t, instances[0].addr, token, userID, last)
+	require.Equal(t, http.StatusNotFound, status, "given back once")
+
+	status, _, _ = evaluate(t, instances[0].addr, token, "123456")
+	require.Equal(t, http.StatusOK, status, "the receipt made room for one attempt")
 }

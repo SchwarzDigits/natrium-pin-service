@@ -3,7 +3,8 @@
 The PIN service of [Natrium](https://github.com/SchwarzDigits/natrium). Natrium protects a user's key file with a short
 PIN. The key of the file is derived from the PIN and a secret of this service, through an oblivious pseudorandom
 function (OPRF, RFC 9497, `P256-SHA256`). Every guess at the PIN needs a request to this service, the service limits
-the requests per Wire user, and it sees neither the PIN nor the result.
+the requests per Wire user, and it sees neither the PIN nor the result. A client that opened the file gives its
+attempt back with a signed receipt, so only wrong guesses stay counted.
 
 Status: works and is tested, not yet in production use. Versions are 0.x: the API can still change, but not the
 derivation of the keys, which existing key files depend on.
@@ -18,10 +19,12 @@ This service makes every guess at the PIN a request to a server that counts:
 
 - **No offline search.** The key of a file depends on a secret of this service. Whoever has the file still needs the
   service for every guess, and gets 5 guesses per hour and 12 per day and user by default.
-- **Blind.** The client blinds the PIN before sending it (OPRF). The service sees neither the PIN nor the key, and does
-  not learn whether a guess was right.
-- **Per user.** The service derives a key of its own for every Wire user from its master key. A file of one user
-  cannot be guessed at with another user's token.
+- **Blind.** The client blinds the PIN before sending it (OPRF). The service sees neither the PIN nor the key.
+- **Receipts.** A client that opened or made a key file signs a receipt with a key that only the file's secret yields,
+  and the service gives the attempt back. A wrong guess has no such signature and stays counted.
+- **Per key file.** The service derives a key of its own for the key files of every secret of a Wire user from its
+  master key, with the public receipt key of the secret. A file of one user cannot be guessed at with another user's
+  token, and an answer for one secret's files is of no use for another's.
 - **No Wire token here.** Clients authenticate with a short-lived token of
   [natrium-token-exchange](https://github.com/SchwarzDigits/natrium-token-exchange), which the service verifies
   offline. It never holds a Wire access token, which would act for the user at Wire.
@@ -39,17 +42,19 @@ sequenceDiagram
     C->>T: POST /v1/token (Wire token, audience "pin")
     T-->>C: PIN token (10 minutes)
     C->>C: blind the PIN
-    C->>P: POST /v1/evaluate (PIN token, blinded element)
+    C->>P: POST /v1/evaluate (PIN token, receipt key, blinded element)
     P->>P: verify the token with the exchange's key set
-    P->>D: count the attempt for the user
-    P->>P: evaluate with the user's key
-    P-->>C: evaluated element
-    C->>C: finalize, combine with Argon2id(PIN), derive the key
+    P->>D: count the attempt for the user, keep it open
+    P->>P: evaluate with the key of the receipt key's key files
+    P-->>C: evaluated element, attempt ID
+    C->>C: finalize, combine with Argon2id(PIN), derive the key, decrypt
+    C->>P: POST /v1/refund (PIN token, attempt ID, signature)
+    P->>D: give the attempt back
 ```
 
 To make a key file, the client does this once and encrypts its secret with the file key. To open one after the browser
 lost its storage, it logs in to Wire, does the same with the key version from the file, and decrypts. A wrong PIN
-shows as a failed decryption, and the attempt has been counted.
+shows as a failed decryption, and the attempt stays counted; a right one is given back with the receipt.
 
 The [documents](docs/README.md) describe the [protocol](docs/protocol.md), [operations](docs/operations.md) and the
 [threat model](docs/threat-model.md).
@@ -61,27 +66,45 @@ POST /v1/evaluate
 Authorization: Bearer <PIN token of natrium-token-exchange>
 Content-Type: application/json
 
-{"keyVersion": 1, "blindedElement": "<base64>"}
+{"keyVersion": 1, "refundKey": "<base64>", "blindedElement": "<base64>"}
 ```
 
 `blindedElement` is a serialized element of P-256 (33 bytes, compressed) in standard base64 with padding.
-`keyVersion` is omitted when a new key file is made; the server then uses its current version. When a key file is
-opened, it is the version from the file. The answer is
-`{"keyVersion": 1, "evaluatedElement": "<base64>", "attemptsRemaining": 4}`: `attemptsRemaining` is how many more
-attempts the user has before a limit is reached, so a client whose PIN turns out to be wrong can show it.
+`refundKey` is the key file's public key for receipts (ECDSA on P-256, compressed, 33 bytes), from the secret of a
+new file or from the header of an existing one. `keyVersion` is omitted when a new key file is made; the server then
+uses its current version. When a key file is opened, it is the version from the file. The answer is
+`{"keyVersion": 1, "evaluatedElement": "<base64>", "attemptsRemaining": 4, "attemptId": "<base64>"}`:
+`attemptsRemaining` is how many more attempts the user has before a limit is reached, so a client whose PIN turns
+out to be wrong can show it.
+
+```
+POST /v1/refund
+Authorization: Bearer <PIN token of natrium-token-exchange>
+Content-Type: application/json
+
+{"attemptId": "<base64>", "signature": "<base64>"}
+```
+
+After it opened or made the key file, the client signs the attempt with the key file's private receipt key, and the
+service gives the attempt back: `{"attemptsRemaining": 5}`. Within 15 minutes, once per attempt. See
+[docs/protocol.md](docs/protocol.md#receipts).
 
 Errors have the body `{"error": "<code>"}`:
 
 | Status | Code | When | Counted |
 |---|---|---|---|
-| 400 | `bad_request` | not one JSON object with known fields, more than 1 KiB, no valid element | no |
+| 400 | `bad_request` | not one JSON object with known fields, more than 1 KiB, no valid element or refund key | no |
 | 401 | `unauthorized` | no Bearer token, or the token is not accepted: wrong signature, issuer or audience, expired | no |
 | 410 | `key_version_unavailable` | the key version is not active | no |
 | 429 | `too_many_attempts` | a limit is reached; `Retry-After` gives the seconds until the attempt would be allowed | no |
 | 503 | `unavailable` | the master keys or the exchange's key set are not loaded, or the database cannot be reached | no |
 | 500 | `internal` | an error in the server | only if it occurs in the evaluation |
 
-The server checks in this order: master keys loaded, token, body and element, key version, limits, evaluate. By
+For `/v1/refund` there are also `404 unknown_attempt` (no open attempt of the user with that ID) and
+`403 invalid_signature`.
+
+The server checks in this order: master keys loaded, token, body, refund key and element, key version, limits,
+evaluate. By
 default a user has 5 attempts per hour and 12 per day. Only an attempt within all limits is counted and evaluated.
 Pages of any origin may call the API (CORS with `*`, without credentials): the token is set by the client in the
 header, not added by the browser.
@@ -89,9 +112,10 @@ header, not added by the browser.
 The token is a JWT of natrium-token-exchange for the audience `pin`. The server verifies it offline with the
 exchange's key set: EdDSA, `iss`, `aud`, `exp`, `nbf` and `iat`. The user is the qualified ID in `sub`.
 
-The key of a user is derived from the master key with `DeriveKeyPair` of RFC 9497 and the info string
-`natrium-recovery-v1|<domain>|<user ID>|0`, from the user's qualified ID. The info string keeps its first name: it is
-part of the derivation, and changing it would make every key file unreadable.
+The key of a key file is derived from the master key with `DeriveKeyPair` of RFC 9497 and the info string
+`natrium-recovery-v2|<domain>|<user ID>|0|<refund key>`, from the user's qualified ID and the file's public receipt
+key. The info string is part of the derivation: changing it makes every key file unreadable. Version 2 replaced
+version 1 before production use, without migration.
 
 ## Running
 
@@ -115,7 +139,7 @@ The server listens on one port and serves:
 
 | Path | Purpose |
 |---|---|
-| `/v1/evaluate` | the API |
+| `/v1/evaluate`, `/v1/refund` | the API |
 | `/.well-known/live` | liveness probe, always 200 |
 | `/.well-known/ready` | readiness probe, 200 once the master keys and the exchange's key set are loaded and while the database answers within one second |
 | `/metrics` | Prometheus metrics: requests by result, duration of the token check, loaded master key versions |
@@ -189,8 +213,9 @@ its own setting in the message.
 | `cmd/new-master-key` | creates a master key and prints only its KMS ciphertext |
 | `server` | `Config`, `Validate` and `Run`, the public API |
 | `config` | the environment variables of the command. `LoadFrom` and `LoadKMSFrom` read them through a function, for programs that receive the settings under other names |
-| `internal/httpapi` | `POST /v1/evaluate`: order of the checks, error codes, CORS, logs and metrics |
-| `internal/attempts` | the attempt counter in PostgreSQL and its migrations |
+| `internal/httpapi` | `POST /v1/evaluate` and `POST /v1/refund`: order of the checks, error codes, CORS, logs and metrics |
+| `internal/receipt` | receipt keys and signatures: ECDSA on P-256 with SHA-256 |
+| `internal/attempts` | the attempt counter in PostgreSQL, the open attempts for receipts, and the migrations |
 | `internal/masterkey` | the master keys: KMS, loading with backoff, locked memory |
 | `internal/evaluator` | the OPRF: key derivation from the master key and the info string, evaluation |
 | `internal/tokenauth` | the check of the exchange's tokens against its key set |
