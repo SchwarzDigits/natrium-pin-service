@@ -24,7 +24,9 @@ natrium-token-exchange, which needs a Wire access token of the user.
 | control of the running service | The master keys, and the PIN tokens of the users who make requests, which are accepted nowhere else and expire after 10 minutes. No Wire access token. |
 
 The service sees neither the PIN nor the output of the OPRF. Through receipts it learns when a restore or an export
-succeeded, and the public receipt key of each key file, by which it can tell a user's key files apart.
+succeeded, and the public receipt key of each secret, by which it can tell a user's installations apart. Key files
+exported from one secret share the receipt key and the key; a file made before a change of the PIN stays readable with
+the old PIN.
 
 ## Reaction to a leaked master key
 

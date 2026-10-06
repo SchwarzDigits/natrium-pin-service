@@ -22,9 +22,9 @@ This service makes every guess at the PIN a request to a server that counts:
 - **Blind.** The client blinds the PIN before sending it (OPRF). The service sees neither the PIN nor the key.
 - **Receipts.** A client that opened or made a key file signs a receipt with a key that only the file's secret yields,
   and the service gives the attempt back. A wrong guess has no such signature and stays counted.
-- **Per key file.** The service derives a key of its own for every key file of a Wire user from its master key, with
-  the file's public receipt key. A file of one user cannot be guessed at with another user's token, and an answer for
-  one file is of no use for another.
+- **Per key file.** The service derives a key of its own for the key files of every secret of a Wire user from its
+  master key, with the public receipt key of the secret. A file of one user cannot be guessed at with another user's
+  token, and an answer for one secret's files is of no use for another's.
 - **No Wire token here.** Clients authenticate with a short-lived token of
   [natrium-token-exchange](https://github.com/SchwarzDigits/natrium-token-exchange), which the service verifies
   offline. It never holds a Wire access token, which would act for the user at Wire.

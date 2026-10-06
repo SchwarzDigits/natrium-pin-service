@@ -43,8 +43,9 @@ info = "natrium-recovery-v2|" + domain + "|" + userId + "|" + epoch + "|" + base
 - `epoch` is written in decimal without leading zeros. It is always `0`: key files cannot be revoked yet. A later
   version can revoke all key files of a user by raising the epoch.
 - `refundKey` is the public Ed25519 key of the key file's receipts (see Receipts), 32 bytes, in standard base64 with
-  padding as in the request, 44 characters. It binds the key to one key file: an answer for one refund key is of no
-  use for a key file with another.
+  padding as in the request, 44 characters. It binds the key to the key files of one secret: an answer for one refund
+  key is of no use for a key file with another. Key files exported from the same secret, e.g. before and after a
+  change of the PIN, have the same refund key and so the same key; an older file stays readable with its old PIN.
 - The info string is encoded as UTF-8; all its characters are ASCII.
 
 Example:
@@ -198,7 +199,8 @@ apply.
 
 ## Receipts
 
-Each key file has a key pair for receipts. The client derives it from the secret in the key file:
+The key pair for receipts belongs to the secret in the key file, so all key files of one secret share it. The client
+derives it from the secret:
 
 ```
 refundSeed = HKDF-SHA256(ikm = secret, salt = empty, info = "natrium-pin-refund-v1|" + domain + "|" + userId)
@@ -237,15 +239,17 @@ user and keeps the resulting bytes. The service must match it. The library check
    leak, each guess is still expensive.
 6. `key = HKDF-SHA256(ikm = o || a, info = "sodium/v1/recovery-data")`.
 7. The secret is encrypted with AES-256-GCM. The header, in plaintext, holds the format version, `keyVersion`,
-   `refundKey`, the Argon2 parameters, the salt, the nonce and the user's qualified ID; it is the associated data.
+   `refundKey`, the Argon2 parameters, the salt, the nonce and the user's qualified ID or a hash of it; it is the
+   associated data.
 8. `POST /v1/refund` for the attempt: an export uses up no attempt.
 
 **Restore** (empty browser):
 
 1. Log in to Wire, only to get tokens, without registering a client. The login comes before decrypting, because the
    PIN token needs a Wire access token.
-2. Compare the qualified ID in the header with the logged-in user; bytes of another user are refused before the
-   service is asked, so they cost no attempt.
+2. Compare the qualified ID in the header, or its hash, with the logged-in user; bytes of another user are refused
+   before the service is asked, so they cost no attempt. `domain` and `userId` in the info strings are those of the
+   logged-in user.
 3. A PIN token from natrium-token-exchange (`{"audience": "pin"}`), without a key: the key comes out of the bytes.
 4. PIN, `POST /v1/evaluate` with `keyVersion` and `refundKey` from the header, derive the key, decrypt.
 5. If AES-GCM fails, the PIN was wrong. The attempt stays counted; `attemptsRemaining` of the answer says how many are
