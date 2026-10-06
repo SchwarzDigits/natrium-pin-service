@@ -88,13 +88,10 @@ func (f *fakeCounter) Take(_ context.Context, domain, userID string, refundKey [
 		f.counts[userID+"@"+domain]--
 		return attempts.Decision{RetryAfter: f.retryAfter}, nil
 	}
-	decision := attempts.Decision{Allowed: true, Remaining: f.limit - f.counts[userID+"@"+domain]}
-	if refundKey != nil {
-		f.nextID++
-		decision.AttemptID = bytes.Repeat([]byte{f.nextID}, attempts.AttemptIDSize)
-		f.open[string(decision.AttemptID)] = [2]string{userID + "@" + domain, string(refundKey)}
-	}
-	return decision, nil
+	f.nextID++
+	id := bytes.Repeat([]byte{f.nextID}, attempts.AttemptIDSize)
+	f.open[string(id)] = [2]string{userID + "@" + domain, string(refundKey)}
+	return attempts.Decision{Allowed: true, Remaining: f.limit - f.counts[userID+"@"+domain], AttemptID: id}, nil
 }
 
 func (f *fakeCounter) Refund(_ context.Context, domain, userID string, attemptID []byte,
@@ -300,6 +297,7 @@ func TestBadRequestsAreNotCounted(t *testing.T) {
 		"unknown field":         `{"refundKey":"` + refundKeyValid + `","blindedElement":"` + blindedValid + `","pin":"1"}`,
 		"data after object":     `{"refundKey":"` + refundKeyValid + `","blindedElement":"` + blindedValid + `"}{}`,
 		"missing element":       `{"keyVersion":2}`,
+		"missing refund key":    `{"blindedElement":"` + blindedValid + `"}`,
 		"refund key not base64": `{"refundKey":"***","blindedElement":"` + blindedValid + `"}`,
 		"refund key short":      `{"refundKey":"` + refundKeyValid[:40] + `","blindedElement":"` + blindedValid + `"}`,
 		"refund key off curve":  `{"refundKey":"` + notOnCurve + `","blindedElement":"` + blindedValid + `"}`,
@@ -630,26 +628,4 @@ func TestRefundPreflightAndMetrics(t *testing.T) {
 	require.NoError(t, json.Unmarshal([]byte(body), &signature))
 	require.NotContains(t, f.logs.String(), signature.Signature)
 	require.Contains(t, f.logs.String(), `"msg":"refund"`)
-}
-
-// A client that does not send a receipt key yet gets the evaluation of version 1, which its key files were made
-// with, and no attempt ID. Until the clients have moved, this path stays.
-func TestEvaluationWithoutReceiptKeyUsesVersion1(t *testing.T) {
-	f := newFixture(t)
-	rec := f.post(t, `{"blindedElement":"`+blindedValid+`"}`)
-	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
-	var resp map[string]any
-	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
-	require.NotContains(t, resp, "attemptId")
-
-	raw, err := base64.StdEncoding.DecodeString(blindedValid)
-	require.NoError(t, err)
-	element, err := evaluator.ParseElement(raw)
-	require.NoError(t, err)
-	info, err := evaluator.LegacyInfo(aliceDomain, aliceID, 0)
-	require.NoError(t, err)
-	want, err := evaluator.Evaluate(f.keys.masters[currentKey], info, element)
-	require.NoError(t, err)
-	require.Equal(t, base64.StdEncoding.EncodeToString(want), resp["evaluatedElement"])
-	require.Equal(t, 1, f.counter.count(), "the attempt is counted")
 }
