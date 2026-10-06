@@ -42,17 +42,19 @@ sequenceDiagram
     C->>T: POST /v1/token (Wire token, audience "pin")
     T-->>C: PIN token (10 minutes)
     C->>C: blind the PIN
-    C->>P: POST /v1/evaluate (PIN token, blinded element)
+    C->>P: POST /v1/evaluate (PIN token, receipt key, blinded element)
     P->>P: verify the token with the exchange's key set
-    P->>D: count the attempt for the user
-    P->>P: evaluate with the user's key
-    P-->>C: evaluated element
-    C->>C: finalize, combine with Argon2id(PIN), derive the key
+    P->>D: count the attempt for the user, keep it open
+    P->>P: evaluate with the key of the receipt key's key files
+    P-->>C: evaluated element, attempt ID
+    C->>C: finalize, combine with Argon2id(PIN), derive the key, decrypt
+    C->>P: POST /v1/refund (PIN token, attempt ID, signature)
+    P->>D: give the attempt back
 ```
 
 To make a key file, the client does this once and encrypts its secret with the file key. To open one after the browser
 lost its storage, it logs in to Wire, does the same with the key version from the file, and decrypts. A wrong PIN
-shows as a failed decryption, and the attempt has been counted.
+shows as a failed decryption, and the attempt stays counted; a right one is given back with the receipt.
 
 The [documents](docs/README.md) describe the [protocol](docs/protocol.md), [operations](docs/operations.md) and the
 [threat model](docs/threat-model.md).
@@ -68,9 +70,9 @@ Content-Type: application/json
 ```
 
 `blindedElement` is a serialized element of P-256 (33 bytes, compressed) in standard base64 with padding.
-`refundKey` is the key file's public Ed25519 key for receipts (32 bytes), from the secret of a new file or from the
-header of an existing one. `keyVersion` is omitted when a new key file is made; the server then uses its current
-version. When a key file is opened, it is the version from the file. The answer is
+`refundKey` is the key file's public key for receipts (ECDSA on P-256, compressed, 33 bytes), from the secret of a
+new file or from the header of an existing one. `keyVersion` is omitted when a new key file is made; the server then
+uses its current version. When a key file is opened, it is the version from the file. The answer is
 `{"keyVersion": 1, "evaluatedElement": "<base64>", "attemptsRemaining": 4, "attemptId": "<base64>"}`:
 `attemptsRemaining` is how many more attempts the user has before a limit is reached, so a client whose PIN turns
 out to be wrong can show it.
@@ -137,7 +139,7 @@ The server listens on one port and serves:
 
 | Path | Purpose |
 |---|---|
-| `/v1/evaluate` | the API |
+| `/v1/evaluate`, `/v1/refund` | the API |
 | `/.well-known/live` | liveness probe, always 200 |
 | `/.well-known/ready` | readiness probe, 200 once the master keys and the exchange's key set are loaded and while the database answers within one second |
 | `/metrics` | Prometheus metrics: requests by result, duration of the token check, loaded master key versions |
@@ -211,8 +213,9 @@ its own setting in the message.
 | `cmd/new-master-key` | creates a master key and prints only its KMS ciphertext |
 | `server` | `Config`, `Validate` and `Run`, the public API |
 | `config` | the environment variables of the command. `LoadFrom` and `LoadKMSFrom` read them through a function, for programs that receive the settings under other names |
-| `internal/httpapi` | `POST /v1/evaluate`: order of the checks, error codes, CORS, logs and metrics |
-| `internal/attempts` | the attempt counter in PostgreSQL and its migrations |
+| `internal/httpapi` | `POST /v1/evaluate` and `POST /v1/refund`: order of the checks, error codes, CORS, logs and metrics |
+| `internal/receipt` | receipt keys and signatures: ECDSA on P-256 with SHA-256 |
+| `internal/attempts` | the attempt counter in PostgreSQL, the open attempts for receipts, and the migrations |
 | `internal/masterkey` | the master keys: KMS, loading with backoff, locked memory |
 | `internal/evaluator` | the OPRF: key derivation from the master key and the info string, evaluation |
 | `internal/tokenauth` | the check of the exchange's tokens against its key set |

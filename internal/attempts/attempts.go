@@ -1,11 +1,15 @@
 // Package attempts counts the evaluations per Wire user in PostgreSQL, against one or more limits, each with a fixed
 // window of its own, e.g. 5 per hour and 12 per day. A window starts with the first attempt after the previous one
-// ended. All instances of the service share the counts through the database. A count is never reset early: after a
-// limit, the user waits until its window ends.
+// ended. All instances of the service share the counts through the database. A count is never reset: after a limit,
+// the user waits until its window ends.
+//
+// A counted attempt stays open for RefundWindow. Within it, a receipt can give it back: the attempt is taken off
+// every window it was counted in that has not ended yet. Whether a receipt is valid decides the caller.
 package attempts
 
 import (
 	"context"
+	"crypto/rand"
 	"embed"
 	"errors"
 	"fmt"
@@ -51,8 +55,50 @@ const countAttempt = `
 UPDATE attempts SET count = count + 1
 WHERE user_domain = $1 AND user_id = $2 AND window_us = ANY($3::bigint[])`
 
+// openAttempt records a counted attempt that a receipt can give back, with the windows it was counted in.
+const openAttempt = `
+INSERT INTO open_attempts (attempt_id, user_domain, user_id, refund_key, created_at, window_us, window_end)
+VALUES ($1, $2, $3, $4, now(), $5::bigint[], $6::timestamptz[])`
+
+// lockOpenAttempt locks an open attempt of the user that is younger than the refund window, given in microseconds.
+const lockOpenAttempt = `
+SELECT refund_key, window_us, window_end FROM open_attempts
+WHERE attempt_id = $1 AND user_domain = $2 AND user_id = $3 AND created_at > now() - $4 * interval '1 microsecond'
+FOR UPDATE`
+
+// closeAttempt deletes an open attempt after its receipt.
+const closeAttempt = `DELETE FROM open_attempts WHERE attempt_id = $1`
+
+// giveBack takes an attempt off the windows it was counted in that are still the same and have not ended.
+const giveBack = `
+UPDATE attempts AS a SET count = greatest(a.count - 1, 0)
+FROM unnest($3::bigint[], $4::timestamptz[]) AS w (window_us, window_end)
+WHERE a.user_domain = $1 AND a.user_id = $2 AND a.window_us = w.window_us AND a.window_end = w.window_end
+  AND a.window_end > now()`
+
+// currentCounts returns the user's windows with the database's clock.
+const currentCounts = `
+SELECT window_us, window_end, count, now() FROM attempts WHERE user_domain = $1 AND user_id = $2`
+
 // deleteExpired removes the rows whose window has ended.
 const deleteExpired = `DELETE FROM attempts WHERE window_end <= now()`
+
+// deleteClosed removes the open attempts older than the refund window, given in microseconds.
+const deleteClosed = `DELETE FROM open_attempts WHERE created_at <= now() - $1 * interval '1 microsecond'`
+
+// RefundWindow is how long a counted attempt can be given back.
+const RefundWindow = 15 * time.Minute
+
+// AttemptIDSize is the size of an attempt ID.
+const AttemptIDSize = 16
+
+var (
+	// ErrUnknownAttempt reports that the user has no open attempt with the ID: it does not exist, was given back
+	// already, or is older than RefundWindow.
+	ErrUnknownAttempt = errors.New("attempts: no open attempt with this ID")
+	// ErrInvalidReceipt reports that the caller rejected the receipt for the attempt's receipt key.
+	ErrInvalidReceipt = errors.New("attempts: the receipt is not valid for the attempt")
+)
 
 // PoolConfig parses the connection string for the counter's pool. Its connections commit with synchronous_commit on,
 // whatever the database's default is, so an acknowledged attempt is not lost in a crash of PostgreSQL.
@@ -158,6 +204,9 @@ type Decision struct {
 	// Remaining is, for an allowed attempt, how many more attempts all limits allow after this one before a window
 	// ends. It is 0 for an attempt that is not allowed.
 	Remaining int
+	// AttemptID names an allowed attempt for its receipt, AttemptIDSize random bytes. Nil for an attempt that is
+	// not allowed.
+	AttemptID []byte
 }
 
 // Counter counts attempts in a pool whose schema is up to date. See Migrate.
@@ -179,11 +228,13 @@ func New(pool *pgxpool.Pool, limits []Limit) *Counter {
 }
 
 // Take decides whether an attempt of the user with the given domain and ID (a UUID) is within all limits, and if so,
-// counts it in all windows. An attempt that is not allowed is not counted. Deciding and counting are one transaction,
-// so concurrent attempts, also from other instances, never exceed a limit together.
-func (c *Counter) Take(ctx context.Context, domain, userID string) (Decision, error) {
+// counts it in all windows and keeps it open for a receipt by refundKey. An attempt that is not allowed is not
+// counted. Deciding and counting are one transaction, so concurrent attempts, also from other instances, never exceed
+// a limit together.
+func (c *Counter) Take(ctx context.Context, domain, userID string, refundKey []byte) (Decision, error) {
 	var decision Decision
 	err := pgx.BeginFunc(ctx, c.pool, func(tx pgx.Tx) error {
+		decision = Decision{}
 		rows, err := tx.Query(ctx, lockWindows, domain, userID, c.windows)
 		if err != nil {
 			return err
@@ -193,6 +244,7 @@ func (c *Counter) Take(ctx context.Context, domain, userID string) (Decision, er
 		var windowUs int64
 		var windowEnd, now time.Time
 		var n int
+		ends := map[int64]time.Time{}
 		_, err = pgx.ForEachRow(rows, []any{&windowUs, &windowEnd, &n, &now}, func() error {
 			limit := c.limits[windowUs].Attempts
 			if n >= limit {
@@ -200,13 +252,23 @@ func (c *Counter) Take(ctx context.Context, domain, userID string) (Decision, er
 				decision.RetryAfter = max(decision.RetryAfter, windowEnd.Sub(now))
 			}
 			decision.Remaining = min(decision.Remaining, limit-n-1)
+			ends[windowUs] = windowEnd
 			return nil
 		})
 		if err != nil || !decision.Allowed {
 			decision.Remaining = 0
 			return err
 		}
-		_, err = tx.Exec(ctx, countAttempt, domain, userID, c.windows)
+		if _, err := tx.Exec(ctx, countAttempt, domain, userID, c.windows); err != nil {
+			return err
+		}
+		windowEnds := make([]time.Time, len(c.windows))
+		for i, w := range c.windows {
+			windowEnds[i] = ends[w]
+		}
+		decision.AttemptID = make([]byte, AttemptIDSize)
+		_, _ = rand.Read(decision.AttemptID) // crypto/rand.Read never fails
+		_, err = tx.Exec(ctx, openAttempt, decision.AttemptID, domain, userID, refundKey, c.windows, windowEnds)
 		return err
 	})
 	if err != nil {
@@ -215,13 +277,84 @@ func (c *Counter) Take(ctx context.Context, domain, userID string) (Decision, er
 	return decision, nil
 }
 
-// DeleteExpired removes the rows whose window has ended and returns how many.
+// Refund gives an open attempt of the user back if valid accepts the receipt for the attempt's receipt key. The
+// attempt is taken off every window it was counted in that has not ended since, and closed, so it is given back at
+// most once. It returns how many attempts all limits allow now, ErrUnknownAttempt if the user has no open attempt
+// with the ID, and ErrInvalidReceipt if valid returns false; the attempt then stays open.
+func (c *Counter) Refund(ctx context.Context, domain, userID string, attemptID []byte,
+	valid func(refundKey []byte) bool) (int, error) {
+	remaining := 0
+	err := pgx.BeginFunc(ctx, c.pool, func(tx pgx.Tx) error {
+		var refundKey []byte
+		var windows []int64
+		var ends []time.Time
+		err := tx.QueryRow(ctx, lockOpenAttempt, attemptID, domain, userID, RefundWindow.Microseconds()).
+			Scan(&refundKey, &windows, &ends)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrUnknownAttempt
+		}
+		if err != nil {
+			return err
+		}
+		if !valid(refundKey) {
+			return ErrInvalidReceipt
+		}
+		if _, err := tx.Exec(ctx, closeAttempt, attemptID); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(ctx, giveBack, domain, userID, windows, ends); err != nil {
+			return err
+		}
+		remaining, err = c.remaining(ctx, tx, domain, userID)
+		return err
+	})
+	switch {
+	case errors.Is(err, ErrUnknownAttempt), errors.Is(err, ErrInvalidReceipt):
+		return 0, err
+	case err != nil:
+		return 0, fmt.Errorf("attempts: refund: %w", err)
+	}
+	return remaining, nil
+}
+
+// remaining returns how many attempts all limits allow the user now. A window that has ended allows its whole limit.
+func (c *Counter) remaining(ctx context.Context, tx pgx.Tx, domain, userID string) (int, error) {
+	counts := map[int64]int{}
+	rows, err := tx.Query(ctx, currentCounts, domain, userID)
+	if err != nil {
+		return 0, err
+	}
+	var windowUs int64
+	var windowEnd, now time.Time
+	var n int
+	_, err = pgx.ForEachRow(rows, []any{&windowUs, &windowEnd, &n, &now}, func() error {
+		if windowEnd.After(now) {
+			counts[windowUs] = n
+		}
+		return nil
+	})
+	if err != nil {
+		return 0, err
+	}
+	remaining := math.MaxInt
+	for _, w := range c.windows {
+		remaining = min(remaining, c.limits[w].Attempts-counts[w])
+	}
+	return remaining, nil
+}
+
+// DeleteExpired removes the rows whose window has ended and the open attempts older than RefundWindow, and returns
+// how many rows it removed.
 func (c *Counter) DeleteExpired(ctx context.Context) (int64, error) {
-	tag, err := c.pool.Exec(ctx, deleteExpired)
+	windows, err := c.pool.Exec(ctx, deleteExpired)
 	if err != nil {
 		return 0, fmt.Errorf("attempts: delete expired: %w", err)
 	}
-	return tag.RowsAffected(), nil
+	open, err := c.pool.Exec(ctx, deleteClosed, RefundWindow.Microseconds())
+	if err != nil {
+		return 0, fmt.Errorf("attempts: delete closed attempts: %w", err)
+	}
+	return windows.RowsAffected() + open.RowsAffected(), nil
 }
 
 // CleanUp calls DeleteExpired now and then every interval, until ctx is canceled. Errors are logged.

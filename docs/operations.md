@@ -115,7 +115,11 @@ JSON on stdout. One line per request to `/v1/evaluate`, with `msg` `evaluate` an
 | `key_version` | the key version, once the body is read |
 | `error` | the cause, for `unavailable` and `internal` |
 
-Tokens, blinded and evaluated elements, master keys and users' keys never appear in logs, errors or metrics.
+One line per request to `/v1/refund`, with `msg` `refund`, `result` (`ok`, `bad_request`, `unauthorized`,
+`unknown_attempt`, `invalid_signature` or `unavailable`), `user` and, for `unavailable`, `error`.
+
+Tokens, blinded and evaluated elements, signatures of receipts, master keys and users' keys never appear in logs,
+errors or metrics.
 
 ## Metrics
 
@@ -124,6 +128,7 @@ On `/metrics`, besides the Go runtime and process metrics:
 | Metric | Type | Meaning |
 |---|---|---|
 | `natrium_pin_evaluate_requests_total{result}` | counter | requests by result, as in the log |
+| `natrium_pin_refund_requests_total{result}` | counter | receipts by result, as in the log |
 | `natrium_pin_token_check_duration_seconds` | histogram | duration of the token check, including a fetch of the key set for an unknown `kid` |
 | `natrium_pin_master_key_versions` | gauge | loaded master key versions; 0 until the keys are loaded |
 
@@ -131,7 +136,7 @@ On `/metrics`, besides the Go runtime and process metrics:
 
 - `/.well-known/live` always answers 200. `/.well-known/ready` answers 200 once the master keys are loaded, while
   there is a current key set of the exchange, and while the database answers within one second.
-- Only `/v1/evaluate` belongs behind the public ingress. The probes and `/metrics` should be reachable only inside the
+- Only `/v1/evaluate` and `/v1/refund` belong behind the public ingress. The probes and `/metrics` should be reachable only inside the
   cluster.
 - The server speaks plain HTTP; TLS ends at the ingress.
 - Tokens are verified offline; a request causes no request to Wire or to the exchange, except a fetch of the key set

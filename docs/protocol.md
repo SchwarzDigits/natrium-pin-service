@@ -42,8 +42,8 @@ info = "natrium-recovery-v2|" + domain + "|" + userId + "|" + epoch + "|" + base
   lowercase UUID in the form 8-4-4-4-12.
 - `epoch` is written in decimal without leading zeros. It is always `0`: key files cannot be revoked yet. A later
   version can revoke all key files of a user by raising the epoch.
-- `refundKey` is the public Ed25519 key of the key file's receipts (see Receipts), 32 bytes, in standard base64 with
-  padding as in the request, 44 characters. It binds the key to the key files of one secret: an answer for one refund
+- `refundKey` is the public key of the key file's receipts (see Receipts), a compressed SEC1 point of P-256, 33 bytes,
+  in standard base64 with padding as in the request, 44 characters. It binds the key to the key files of one secret: an answer for one refund
   key is of no use for a key file with another. Key files exported from the same secret, e.g. before and after a
   change of the PIN, have the same refund key and so the same key; an older file stays readable with its old PIN.
 - The info string is encoded as UTF-8; all its characters are ASCII.
@@ -51,7 +51,7 @@ info = "natrium-recovery-v2|" + domain + "|" + userId + "|" + epoch + "|" + base
 Example:
 
 ```
-natrium-recovery-v2|wire.example|39b7f597-dfd1-4dff-86f5-fe1b79cb70a0|0|11qYAYKxCrfVS/7TyWQHOg7hcvPapiMlrwIaaPcHURo=
+natrium-recovery-v2|wire.example|39b7f597-dfd1-4dff-86f5-fe1b79cb70a0|0|A7RAoFrwwW6LPWoswV51l5MYJ3IkumhNz2Wk3KgW8xku
 ```
 
 This encoding is part of the contract. A change makes every existing key file unreadable. The tests hold fixed
@@ -66,13 +66,13 @@ POST /v1/evaluate
 Authorization: Bearer <PIN token of natrium-token-exchange>
 Content-Type: application/json
 
-{"keyVersion": 1, "refundKey": "11qYAYKxCrfVS/7TyWQHOg7hcvPapiMlrwIaaPcHURo=", "blindedElement": "A3I6HlwJuLnBjR3LyinoAH6V8U9HMtk0bUkP/BlREDaN"}
+{"keyVersion": 1, "refundKey": "A7RAoFrwwW6LPWoswV51l5MYJ3IkumhNz2Wk3KgW8xku", "blindedElement": "A3I6HlwJuLnBjR3LyinoAH6V8U9HMtk0bUkP/BlREDaN"}
 ```
 
 | Field | Meaning |
 |---|---|
 | `keyVersion` | Optional, a number from 1. Omitted when a new key file is made: the server then uses its current version. When a key file is opened, the version from the file. |
-| `refundKey` | Required. The public Ed25519 key of the key file's receipts, 32 bytes in standard base64 with padding. A new key file: the key the client derived from its secret (see Client side); an existing one: the key from its header. It must be a point of the curve and not of small order. |
+| `refundKey` | Required. The public key of the key file's receipts: a compressed SEC1 point of P-256, 33 bytes in standard base64 with padding. A new key file: the key the client derived from its secret (see Receipts); an existing one: the key from its header. |
 | `blindedElement` | `SerializeElement` of RFC 9497: the compressed SEC1 point of P-256, 33 bytes, in standard base64 (RFC 4648, section 4) with padding. For 33 bytes that is 44 characters without `=`. |
 
 Answer `200`:
@@ -94,7 +94,7 @@ The body is always `{"error": "<code>"}`.
 
 | Status | Code | When | Counted |
 |---|---|---|---|
-| 400 | `bad_request` | The body is larger than 1 KiB, is not exactly one JSON object, has unknown fields, `keyVersion` is not a number from 1, `refundKey` is missing, is not standard base64 with padding, is not 32 bytes or is not a usable Ed25519 public key, `blindedElement` is missing, is not standard base64 with padding, is not 33 bytes, is not a point of P-256 or is the identity. | no |
+| 400 | `bad_request` | The body is larger than 1 KiB, is not exactly one JSON object, has unknown fields, `keyVersion` is not a number from 1, `refundKey` is missing, is not standard base64 with padding, is not 33 bytes or is not a compressed point of P-256, `blindedElement` is missing, is not standard base64 with padding, is not 33 bytes, is not a point of P-256 or is the identity. | no |
 | 401 | `unauthorized` | The header `Authorization: Bearer <token>` is missing, or the token is not accepted (see Authentication). The answer carries `WWW-Authenticate: Bearer`. | no |
 | 410 | `key_version_unavailable` | The key version is not one of the active versions. | no |
 | 429 | `too_many_attempts` | The user has reached a limit. `Retry-After` gives the seconds until the attempt would be allowed, rounded up: until the end of the last window whose limit is reached. | no |
@@ -124,8 +124,9 @@ Content-Type: application/json
 {"attemptId": "9mY0r1bKQwS2c1v3Zk8hJA==", "signature": "<64 bytes in standard base64 with padding>"}
 ```
 
-The receipt for an attempt whose key file the client could open, or whose key file it made. `signature` is the
-Ed25519 signature (RFC 8032) with the private key of the attempt's refund key over the UTF-8 bytes of
+The receipt for an attempt whose key file the client could open, or whose key file it made. `signature` is an ECDSA
+signature with SHA-256 (FIPS 186-5) by the private key of the attempt's refund key, `r` and `s` of 32 bytes each,
+big-endian, one after the other, over the UTF-8 bytes of
 
 ```
 "natrium-pin-refund-v1|" + domain + "|" + userId + "|" + attemptId
@@ -203,11 +204,18 @@ The key pair for receipts belongs to the secret in the key file, so all key file
 derives it from the secret:
 
 ```
-refundSeed = HKDF-SHA256(ikm = secret, salt = empty, info = "natrium-pin-refund-v1|" + domain + "|" + userId)
+refundSeed = HKDF-SHA256(ikm = secret, salt = empty, info = "natrium-pin-refund-v1|" + domain + "|" + userId, L = 32)
+d          = DeriveKeyPair(seed = refundSeed, info = "natrium-pin-refund-v1")      RFC 9497, section 3.2.1, P256-SHA256
+refundKey  = d·G, compressed (SEC1, 33 bytes)
 ```
 
-`refundSeed` (32 bytes) is the private Ed25519 key in the form of RFC 8032; its public key is `refundKey`. The public
-key is written into the key file's header in plaintext.
+`d` is the private ECDSA key on P-256, `refundKey` its public key. The public key is written into the key file's
+header in plaintext. `DeriveKeyPair` is the function with which the service derives its OPRF keys; it maps the seed to
+a scalar of P-256 without bias. `internal/evaluator/testdata/interop.json` holds fixed values from the secret to the
+public key, with a valid signature.
+
+The receipts use ECDSA on P-256, like the OPRF. BSI TR-02102-1 (version 2026-01) recommends ECDSA, and for MLS the
+cipher suites on P-256, P-384 and P-521; it does not list EdDSA.
 
 - The client sends `refundKey` with every evaluation. The service derives the key of the evaluation from it (see
   Keys) and stores it with the attempt, with the windows the attempt was counted in.

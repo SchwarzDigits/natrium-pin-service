@@ -1,15 +1,20 @@
 // Recomputes the client side of the fixed values in internal/evaluator/testdata/interop.json with @noble/curves, the
 // library Natrium uses, and checks that it arrives at the same values as the server:
 //
-//   - the info string from domain, user ID and epoch,
+//   - the receipt key pair from the secret (HKDF-SHA256, then DeriveKeyPair), and its compressed public key,
+//   - the info string from domain, user ID, epoch and the receipt key,
 //   - the input: the PIN in NFC as UTF-8,
 //   - the user's key from master and info (DeriveKeyPair),
 //   - the blinded element from input and blind,
-//   - the evaluated element (BlindEvaluate) and the output (Finalize), also with a random blind.
+//   - the evaluated element (BlindEvaluate) and the output (Finalize), also with a random blind,
+//   - the receipt: the signed message, the committed signature (ECDSA P-256 with SHA-256, r||s), and a signature of
+//     its own (RFC 6979), which must verify too.
 //
 // Run with: npm ci && node check.mjs
 import { readFileSync } from 'node:fs';
-import { p256_hasher, p256_oprf } from '@noble/curves/nist.js';
+import { p256, p256_hasher, p256_oprf } from '@noble/curves/nist.js';
+import { hkdf } from '@noble/hashes/hkdf.js';
+import { sha256 } from '@noble/hashes/sha2.js';
 
 const { oprf } = p256_oprf;
 const utf8 = (s) => new TextEncoder().encode(s);
@@ -30,7 +35,14 @@ const check = (name, what, got, want) => {
 };
 
 for (const v of vectors) {
-  const info = `natrium-recovery-v1|${v.domain}|${v.userId}|${v.epoch}`;
+  const refundSeed = hkdf(sha256, fromHex(v.secret), undefined, utf8(`natrium-pin-refund-v1|${v.domain}|${v.userId}`), 32);
+  check(v.name, 'refund seed', hex(refundSeed), v.refundSeed);
+  const refundPrivate = oprf.deriveKeyPair(refundSeed, utf8('natrium-pin-refund-v1')).secretKey;
+  check(v.name, 'refund private key', hex(refundPrivate), v.refundPrivateKey);
+  const refundKey = p256.getPublicKey(refundPrivate, true);
+  check(v.name, 'refund key', base64(refundKey), v.refundKey);
+
+  const info = `natrium-recovery-v2|${v.domain}|${v.userId}|${v.epoch}|${base64(refundKey)}`;
   check(v.name, 'info', info, v.info);
 
   const input = utf8(v.pin.normalize('NFC'));
@@ -52,6 +64,14 @@ for (const v of vectors) {
   const random = oprf.blind(input);
   const randomOutput = oprf.finalize(input, random.blind, oprf.blindEvaluate(secretKey, random.blinded));
   check(v.name, 'output with a random blind', hex(randomOutput), v.output);
+
+  const message = `natrium-pin-refund-v1|${v.domain}|${v.userId}|${v.attemptId}`;
+  check(v.name, 'refund message', message, v.refundMessage);
+  // The server accepts any valid signature; Go's signatures need not have a low s.
+  const committed = p256.verify(fromBase64(v.signature), utf8(message), refundKey, { lowS: false });
+  check(v.name, 'committed signature verifies', committed, true);
+  const own = p256.sign(utf8(message), refundPrivate);
+  check(v.name, 'own signature verifies', p256.verify(own, utf8(message), refundKey, { lowS: false }), true);
 }
 
 if (failures > 0) {

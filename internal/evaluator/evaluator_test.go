@@ -2,6 +2,7 @@ package evaluator
 
 import (
 	"bytes"
+	"encoding/base64"
 	"encoding/hex"
 	"testing"
 
@@ -74,37 +75,49 @@ func TestEvaluateMatchesRFC9497(t *testing.T) {
 }
 
 // Fixed values for our info encoding. If this test fails, existing key files can no longer be decrypted.
-func TestInfoEncodingIsFixed(t *testing.T) {
-	info, err := Info("wire.example", "39b7f597-dfd1-4dff-86f5-fe1b79cb70a0", 0)
-	require.NoError(t, err)
-	require.Equal(t, "natrium-recovery-v1|wire.example|39b7f597-dfd1-4dff-86f5-fe1b79cb70a0|0", string(info))
+// exampleRefundKey is the receipt key of the examples in docs/protocol.md.
+const exampleRefundKey = "A7RAoFrwwW6LPWoswV51l5MYJ3IkumhNz2Wk3KgW8xku"
 
-	info, err = Info("wire.example", "39b7f597-dfd1-4dff-86f5-fe1b79cb70a0", 12)
+func refundKey(t *testing.T) []byte {
+	t.Helper()
+	key, err := base64.StdEncoding.DecodeString(exampleRefundKey)
 	require.NoError(t, err)
-	require.Equal(t, "natrium-recovery-v1|wire.example|39b7f597-dfd1-4dff-86f5-fe1b79cb70a0|12", string(info))
+	return key
+}
+
+func TestInfoEncodingIsFixed(t *testing.T) {
+	info, err := Info("wire.example", "39b7f597-dfd1-4dff-86f5-fe1b79cb70a0", 0, refundKey(t))
+	require.NoError(t, err)
+	require.Equal(t, "natrium-recovery-v2|wire.example|39b7f597-dfd1-4dff-86f5-fe1b79cb70a0|0|"+exampleRefundKey,
+		string(info))
+
+	info, err = Info("wire.example", "39b7f597-dfd1-4dff-86f5-fe1b79cb70a0", 12, refundKey(t))
+	require.NoError(t, err)
+	require.Equal(t, "natrium-recovery-v2|wire.example|39b7f597-dfd1-4dff-86f5-fe1b79cb70a0|12|"+exampleRefundKey,
+		string(info))
 
 	master := make([]byte, MasterSize)
 	for i := range master {
 		master[i] = byte(i)
 	}
-	info, err = Info("wire.example", "39b7f597-dfd1-4dff-86f5-fe1b79cb70a0", 0)
+	info, err = Info("wire.example", "39b7f597-dfd1-4dff-86f5-fe1b79cb70a0", 0, refundKey(t))
 	require.NoError(t, err)
 	key, err := deriveKey(master, info)
 	require.NoError(t, err)
 	sk, err := key.MarshalBinary()
 	require.NoError(t, err)
-	require.Equal(t, "50200e86f27c7a53becc68ffada0edd3034c6570a46badd6541969d21f3b9649", hex.EncodeToString(sk))
+	require.Equal(t, "d3e29efe18859211267ca8afc6540d9afc9e4ca32b364a121e56cfd8e135a5e6", hex.EncodeToString(sk))
 
 	blinded := "038685b582b12819611d877c17a39c29b460fb3a9e68a66799bcb97d6b05eefc4c"
 	evaluated, err := Evaluate(master, info, element(t, blinded))
 	require.NoError(t, err)
-	require.Equal(t, "03eb3e7bf29bde0c2d511b2a92cffcf1655f4df3f520498a9971d3c70160d57bb8", hex.EncodeToString(evaluated))
+	require.Equal(t, "02c06abab8686496eee00103d8874d92c402771b79b9eba016fadf5586105cc369", hex.EncodeToString(evaluated))
 
 	output := clientOutput(t, unhex(t, rfcBlind), []byte("123456"), func(b []byte) []byte {
 		require.Equal(t, blinded, hex.EncodeToString(b))
 		return evaluated
 	})
-	require.Equal(t, "013c7a4db8f18dae81eedacb080295452328f8cd6fa1bcdf38d3471607346c37", hex.EncodeToString(output))
+	require.Equal(t, "cdb5a6c8ce1a0fa5ace124e069ab15e2f7802c768720108ca630db2f922344a9", hex.EncodeToString(output))
 }
 
 func TestInfoRejectsOtherForms(t *testing.T) {
@@ -122,8 +135,12 @@ func TestInfoRejectsOtherForms(t *testing.T) {
 		{"wire.example", "39b7f597-dfd1-4dff-86f5+fe1b79cb70a0"},
 		{"wire.example", ""},
 	} {
-		_, err := Info(tc.domain, tc.userID, 0)
+		_, err := Info(tc.domain, tc.userID, 0, refundKey(t))
 		require.Error(t, err, "domain %q, user ID %q", tc.domain, tc.userID)
+	}
+	for _, key := range [][]byte{nil, refundKey(t)[:31], append(refundKey(t), 0)} {
+		_, err := Info("wire.example", id, 0, key)
+		require.Error(t, err, "refund key of %d bytes", len(key))
 	}
 }
 
@@ -161,9 +178,13 @@ func TestEvaluateRejectsBadInput(t *testing.T) {
 func TestRoundTripWithClient(t *testing.T) {
 	master1 := bytes.Repeat([]byte{1}, MasterSize)
 	master2 := bytes.Repeat([]byte{2}, MasterSize)
-	alice, err := Info("wire.example", "11111111-1111-4111-8111-111111111111", 0)
+	alice, err := Info("wire.example", "11111111-1111-4111-8111-111111111111", 0, refundKey(t))
 	require.NoError(t, err)
-	bob, err := Info("wire.example", "22222222-2222-4222-8222-222222222222", 0)
+	bob, err := Info("wire.example", "22222222-2222-4222-8222-222222222222", 0, refundKey(t))
+	require.NoError(t, err)
+	otherKey := append([]byte{}, refundKey(t)...)
+	otherKey[0] ^= 1
+	aliceOtherFile, err := Info("wire.example", "11111111-1111-4111-8111-111111111111", 0, otherKey)
 	require.NoError(t, err)
 	pin := []byte("123456")
 
@@ -189,6 +210,7 @@ func TestRoundTripWithClient(t *testing.T) {
 	require.Equal(t, first, run(master1, alice, pin), "same PIN, other blind")
 	require.NotEqual(t, first, run(master1, alice, []byte("123457")), "other PIN")
 	require.NotEqual(t, first, run(master1, bob, pin), "other user")
+	require.NotEqual(t, first, run(master1, aliceOtherFile, pin), "other receipt key")
 	require.NotEqual(t, first, run(master2, alice, pin), "other master")
 }
 

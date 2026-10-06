@@ -29,6 +29,9 @@ const (
 	day                = 24 * time.Hour
 )
 
+// refundKey stands for the receipt key of a key file. The counter stores it and does not check it.
+var refundKey = []byte("receipt key of the key file")
+
 // defaults are the limits of the server: 5 per hour and 12 per day.
 var defaults = []attempts.Limit{{Attempts: 5, Window: hour}, {Attempts: 12, Window: day}}
 
@@ -87,7 +90,7 @@ func counted(t *testing.T, pool *pgxpool.Pool, user string) map[time.Duration]in
 
 func take(t *testing.T, counter *attempts.Counter, user string) attempts.Decision {
 	t.Helper()
-	d, err := counter.Take(t.Context(), domain, user)
+	d, err := counter.Take(t.Context(), domain, user, refundKey)
 	require.NoError(t, err)
 	return d
 }
@@ -193,7 +196,7 @@ func TestUsersAreCountedSeparately(t *testing.T) {
 	require.False(t, take(t, counter, user).Allowed)
 
 	require.True(t, take(t, counter, newUser()).Allowed)
-	d, err := counter.Take(t.Context(), "other.example", user)
+	d, err := counter.Take(t.Context(), "other.example", user, refundKey)
 	require.NoError(t, err)
 	require.True(t, d.Allowed)
 }
@@ -260,7 +263,7 @@ func TestConcurrentAttemptsFromTwoInstances(t *testing.T) {
 	for _, counter := range instances {
 		for range perInstance {
 			wg.Go(func() {
-				d, err := counter.Take(t.Context(), domain, user)
+				d, err := counter.Take(t.Context(), domain, user, refundKey)
 				mu.Lock()
 				defer mu.Unlock()
 				if err != nil {
@@ -276,4 +279,109 @@ func TestConcurrentAttemptsFromTwoInstances(t *testing.T) {
 	require.Empty(t, errs)
 	require.Equal(t, 5, allowed)
 	require.Equal(t, map[time.Duration]int{hour: 5, day: 5}, counted(t, pool, user))
+}
+
+func refund(t *testing.T, counter *attempts.Counter, user string, id []byte, valid bool) (int, error) {
+	t.Helper()
+	return counter.Refund(t.Context(), domain, user, id, func(key []byte) bool {
+		require.Equal(t, refundKey, key, "the receipt key of the attempt")
+		return valid
+	})
+}
+
+func TestRefundGivesTheAttemptBack(t *testing.T) {
+	pool := testPool(t)
+	counter := attempts.New(pool, defaults)
+	user := newUser()
+	take(t, counter, user)
+	take(t, counter, user)
+	d := take(t, counter, user)
+	require.Len(t, d.AttemptID, attempts.AttemptIDSize)
+	require.Equal(t, 2, d.Remaining)
+	require.Equal(t, map[time.Duration]int{hour: 3, day: 3}, counted(t, pool, user))
+
+	remaining, err := refund(t, counter, user, d.AttemptID, true)
+	require.NoError(t, err)
+	require.Equal(t, 3, remaining, "the earlier attempts stay counted")
+	require.Equal(t, map[time.Duration]int{hour: 2, day: 2}, counted(t, pool, user))
+
+	_, err = refund(t, counter, user, d.AttemptID, true)
+	require.ErrorIs(t, err, attempts.ErrUnknownAttempt, "an attempt is given back once")
+	require.Equal(t, map[time.Duration]int{hour: 2, day: 2}, counted(t, pool, user))
+}
+
+func TestRefundNeedsAValidReceipt(t *testing.T) {
+	pool := testPool(t)
+	counter := attempts.New(pool, defaults)
+	user := newUser()
+	d := take(t, counter, user)
+
+	_, err := refund(t, counter, user, d.AttemptID, false)
+	require.ErrorIs(t, err, attempts.ErrInvalidReceipt)
+	require.Equal(t, map[time.Duration]int{hour: 1, day: 1}, counted(t, pool, user), "still counted")
+
+	_, err = refund(t, counter, user, d.AttemptID, true)
+	require.NoError(t, err, "the attempt stays open after a rejected receipt")
+	require.Equal(t, map[time.Duration]int{hour: 0, day: 0}, counted(t, pool, user))
+}
+
+func TestRefundIsOnlyForTheUser(t *testing.T) {
+	pool := testPool(t)
+	counter := attempts.New(pool, defaults)
+	user := newUser()
+	d := take(t, counter, user)
+
+	_, err := refund(t, counter, newUser(), d.AttemptID, true)
+	require.ErrorIs(t, err, attempts.ErrUnknownAttempt)
+	_, err = refund(t, counter, user, make([]byte, attempts.AttemptIDSize), true)
+	require.ErrorIs(t, err, attempts.ErrUnknownAttempt)
+	require.Equal(t, map[time.Duration]int{hour: 1, day: 1}, counted(t, pool, user))
+}
+
+// An attempt counted in a window that has ended since is taken off the windows that still run only.
+func TestRefundSkipsEndedWindows(t *testing.T) {
+	pool := testPool(t)
+	counter := attempts.New(pool, defaults)
+	user := newUser()
+	d := take(t, counter, user)
+	endWindow(t, pool, user, hour)
+	take(t, counter, user)
+	require.Equal(t, map[time.Duration]int{hour: 1, day: 2}, counted(t, pool, user))
+
+	remaining, err := refund(t, counter, user, d.AttemptID, true)
+	require.NoError(t, err)
+	require.Equal(t, map[time.Duration]int{hour: 1, day: 1}, counted(t, pool, user),
+		"the new hour window does not hold the attempt")
+	require.Equal(t, 4, remaining)
+}
+
+func TestRefundEndsWithTheRefundWindow(t *testing.T) {
+	pool := testPool(t)
+	counter := attempts.New(pool, defaults)
+	user := newUser()
+	d := take(t, counter, user)
+	_, err := pool.Exec(t.Context(),
+		`UPDATE open_attempts SET created_at = now() - $2 * interval '1 microsecond' WHERE attempt_id = $1`,
+		d.AttemptID, attempts.RefundWindow.Microseconds())
+	require.NoError(t, err)
+
+	_, err = refund(t, counter, user, d.AttemptID, true)
+	require.ErrorIs(t, err, attempts.ErrUnknownAttempt)
+
+	_, err = counter.DeleteExpired(t.Context())
+	require.NoError(t, err)
+	var open int
+	require.NoError(t, pool.QueryRow(t.Context(), `SELECT count(*) FROM open_attempts WHERE attempt_id = $1`,
+		d.AttemptID).Scan(&open))
+	require.Zero(t, open, "the cleanup deletes it")
+}
+
+func TestRefusedAttemptsHaveNoID(t *testing.T) {
+	pool := testPool(t)
+	counter := attempts.New(pool, []attempts.Limit{{Attempts: 1, Window: hour}})
+	user := newUser()
+	require.NotNil(t, take(t, counter, user).AttemptID)
+	d := take(t, counter, user)
+	require.False(t, d.Allowed)
+	require.Nil(t, d.AttemptID)
 }

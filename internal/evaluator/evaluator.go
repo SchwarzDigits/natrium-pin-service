@@ -1,11 +1,13 @@
-// Package evaluator is the server side of the OPRF (RFC 9497, mode OPRF, suite P256-SHA256). It derives the key of a
-// user from a master key and the user's info string and evaluates a blinded element with it.
+// Package evaluator is the server side of the OPRF (RFC 9497, mode OPRF, suite P256-SHA256). It derives the key of
+// a user's key files from a master key and an info string of the user and the key files' receipt key, and evaluates
+// a blinded element with it.
 //
 // The encoding of the info string is part of the contract with the clients: a change makes every existing key file
 // unreadable.
 package evaluator
 
 import (
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"strconv"
@@ -20,8 +22,11 @@ const ElementSize = 33
 // MasterSize is the size of a master key, the seed of DeriveKeyPair.
 const MasterSize = 32
 
-// infoPrefix names this use of the OPRF and the version of the info encoding.
-const infoPrefix = "natrium-recovery-v1"
+// RefundKeySize is the size of a receipt key in the info string: a compressed point of P-256.
+const RefundKeySize = 33
+
+// infoPrefix names this use of the OPRF and the version of the info encoding. Version 2 added the receipt key.
+const infoPrefix = "natrium-recovery-v2"
 
 // infoSeparator separates the fields of the info string. It cannot occur in a domain or a user ID.
 const infoSeparator = "|"
@@ -49,22 +54,26 @@ func ParseElement(b []byte) (Element, error) {
 	return Element{e: e}, nil
 }
 
-// Info returns the info string of DeriveKeyPair for a user:
+// Info returns the info string of DeriveKeyPair for the key files of a user with the receipt key refundKey:
 //
-//	"natrium-recovery-v1|" + domain + "|" + userID + "|" + epoch
+//	"natrium-recovery-v2|" + domain + "|" + userID + "|" + epoch + "|" + base64(refundKey)
 //
 // domain is the lowercase domain of the user's qualified ID, userID the lowercase user ID in the canonical form
-// 8-4-4-4-12, and epoch is written in decimal without leading zeros. Other forms are rejected rather than converted,
-// so that one user has exactly one info string.
-func Info(domain, userID string, epoch uint64) ([]byte, error) {
+// 8-4-4-4-12, epoch is written in decimal without leading zeros, and refundKey, 33 bytes, in standard base64 with
+// padding. Other forms are rejected rather than converted, so that a user's key files of one secret have exactly one
+// info string.
+func Info(domain, userID string, epoch uint64, refundKey []byte) ([]byte, error) {
 	if !isDomain(domain) {
 		return nil, fmt.Errorf("evaluator: domain %q is not a lowercase domain name", domain)
 	}
 	if !isCanonicalUUID(userID) {
 		return nil, fmt.Errorf("evaluator: user ID %q is not a lowercase UUID in canonical form", userID)
 	}
+	if len(refundKey) != RefundKeySize {
+		return nil, fmt.Errorf("evaluator: refund key must be %d bytes, got %d", RefundKeySize, len(refundKey))
+	}
 	info := infoPrefix + infoSeparator + domain + infoSeparator + userID + infoSeparator +
-		strconv.FormatUint(epoch, 10)
+		strconv.FormatUint(epoch, 10) + infoSeparator + base64.StdEncoding.EncodeToString(refundKey)
 	return []byte(info), nil
 }
 
