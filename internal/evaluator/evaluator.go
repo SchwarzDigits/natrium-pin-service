@@ -28,6 +28,9 @@ const RefundKeySize = 33
 // infoPrefix names this use of the OPRF and the version of the info encoding. Version 2 added the receipt key.
 const infoPrefix = "natrium-recovery-v2"
 
+// legacyInfoPrefix is the info encoding of version 1, without receipt key. See LegacyInfo.
+const legacyInfoPrefix = "natrium-recovery-v1"
+
 // infoSeparator separates the fields of the info string. It cannot occur in a domain or a user ID.
 const infoSeparator = "|"
 
@@ -74,6 +77,24 @@ func Info(domain, userID string, epoch uint64, refundKey []byte) ([]byte, error)
 	}
 	info := infoPrefix + infoSeparator + domain + infoSeparator + userID + infoSeparator +
 		strconv.FormatUint(epoch, 10) + infoSeparator + base64.StdEncoding.EncodeToString(refundKey)
+	return []byte(info), nil
+}
+
+// LegacyInfo returns the info string of version 1, without receipt key:
+//
+//	"natrium-recovery-v1|" + domain + "|" + userID + "|" + epoch
+//
+// It serves clients that do not send a receipt key yet, and their key files, until they have moved to version 2.
+// It will be removed then.
+func LegacyInfo(domain, userID string, epoch uint64) ([]byte, error) {
+	if !isDomain(domain) {
+		return nil, fmt.Errorf("evaluator: domain %q is not a lowercase domain name", domain)
+	}
+	if !isCanonicalUUID(userID) {
+		return nil, fmt.Errorf("evaluator: user ID %q is not a lowercase UUID in canonical form", userID)
+	}
+	info := legacyInfoPrefix + infoSeparator + domain + infoSeparator + userID + infoSeparator +
+		strconv.FormatUint(epoch, 10)
 	return []byte(info), nil
 }
 

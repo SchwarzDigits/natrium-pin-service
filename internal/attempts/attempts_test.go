@@ -385,3 +385,18 @@ func TestRefusedAttemptsHaveNoID(t *testing.T) {
 	require.False(t, d.Allowed)
 	require.Nil(t, d.AttemptID)
 }
+
+func TestAttemptsWithoutReceiptKeyAreCountedButNotOpen(t *testing.T) {
+	pool := testPool(t)
+	counter := attempts.New(pool, defaults)
+	user := newUser()
+	d, err := counter.Take(t.Context(), domain, user, nil)
+	require.NoError(t, err)
+	require.True(t, d.Allowed)
+	require.Nil(t, d.AttemptID)
+	require.Equal(t, map[time.Duration]int{hour: 1, day: 1}, counted(t, pool, user))
+	var open int
+	require.NoError(t, pool.QueryRow(t.Context(),
+		`SELECT count(*) FROM open_attempts WHERE user_domain = $1 AND user_id = $2`, domain, user).Scan(&open))
+	require.Zero(t, open)
+}

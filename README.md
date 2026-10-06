@@ -71,8 +71,9 @@ Content-Type: application/json
 
 `blindedElement` is a serialized element of P-256 (33 bytes, compressed) in standard base64 with padding.
 `refundKey` is the key file's public key for receipts (ECDSA on P-256, compressed, 33 bytes), from the secret of a
-new file or from the header of an existing one. `keyVersion` is omitted when a new key file is made; the server then
-uses its current version. When a key file is opened, it is the version from the file. The answer is
+new file or from the header of an existing one. A client that does not send it yet gets the evaluation of version 1
+and no receipt, until it has moved. `keyVersion` is omitted when a new key file is made; the server then uses its
+current version. When a key file is opened, it is the version from the file. The answer is
 `{"keyVersion": 1, "evaluatedElement": "<base64>", "attemptsRemaining": 4, "attemptId": "<base64>"}`:
 `attemptsRemaining` is how many more attempts the user has before a limit is reached, so a client whose PIN turns
 out to be wrong can show it.

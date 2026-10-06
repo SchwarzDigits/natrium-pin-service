@@ -120,6 +120,31 @@ func TestInfoEncodingIsFixed(t *testing.T) {
 	require.Equal(t, "cdb5a6c8ce1a0fa5ace124e069ab15e2f7802c768720108ca630db2f922344a9", hex.EncodeToString(output))
 }
 
+// Key files of clients without receipt key keep their values: these are the values of version 1.
+func TestLegacyInfoKeepsTheValuesOfVersion1(t *testing.T) {
+	info, err := LegacyInfo("wire.example", "39b7f597-dfd1-4dff-86f5-fe1b79cb70a0", 0)
+	require.NoError(t, err)
+	require.Equal(t, "natrium-recovery-v1|wire.example|39b7f597-dfd1-4dff-86f5-fe1b79cb70a0|0", string(info))
+
+	master := make([]byte, MasterSize)
+	for i := range master {
+		master[i] = byte(i)
+	}
+	key, err := deriveKey(master, info)
+	require.NoError(t, err)
+	sk, err := key.MarshalBinary()
+	require.NoError(t, err)
+	require.Equal(t, "50200e86f27c7a53becc68ffada0edd3034c6570a46badd6541969d21f3b9649", hex.EncodeToString(sk))
+
+	blinded := "038685b582b12819611d877c17a39c29b460fb3a9e68a66799bcb97d6b05eefc4c"
+	evaluated, err := Evaluate(master, info, element(t, blinded))
+	require.NoError(t, err)
+	require.Equal(t, "03eb3e7bf29bde0c2d511b2a92cffcf1655f4df3f520498a9971d3c70160d57bb8", hex.EncodeToString(evaluated))
+
+	_, err = LegacyInfo("Wire.example", "39b7f597-dfd1-4dff-86f5-fe1b79cb70a0", 0)
+	require.Error(t, err)
+}
+
 func TestInfoRejectsOtherForms(t *testing.T) {
 	const id = "39b7f597-dfd1-4dff-86f5-fe1b79cb70a0"
 	for _, tc := range []struct{ domain, userID string }{
