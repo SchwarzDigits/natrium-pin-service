@@ -52,8 +52,8 @@ github.com/sethvargo/go-retry v0.4.0 h1:9qy1OoIAxBL+gBYnkTnTnWle5wlfsXQlwRzIbbpd
 github.com/sethvargo/go-retry v0.4.0/go.mod h1:tvsjdKG6xfiCx4LSiUZ06kcv38xvdVQwv8R6/VnnVWg=
 github.com/stackitcloud/stackit-sdk-go/core v0.27.1 h1:k7SrqqMoHjkvHbx6n6nV3Lt51itp8nNplht6vGHkPhw=
 github.com/stackitcloud/stackit-sdk-go/core v0.27.1/go.mod h1:WU1hhxnjXw2EV7CYa1nlEvNpMiRY6CvmIOaHuL3pOaA=
-github.com/stackitcloud/stackit-sdk-go/services/kms v1.13.1 h1:iEPerniBpji6dGiB31p1WAUxgBf9VBIL9gKocfbBqW8=
-github.com/stackitcloud/stackit-sdk-go/services/kms v1.13.1/go.mod h1:aG3xzmeVCsxnLwb+TA4U5i79a4sPiDicWoWG7lyg4Zs=
+github.com/stackitcloud/stackit-sdk-go/services/kms v1.13.2 h1:So1vmj6l1+9iBbH7mLGeti/FGDAFGXXo6Yzc2q+wpIA=
+github.com/stackitcloud/stackit-sdk-go/services/kms v1.13.2/go.mod h1:ZBXRYWP4Yz3Gn75VSFz2mfcLSOrDEbiCoGTIXonvXkA=
 github.com/stretchr/objx v0.1.0/go.mod h1:HFkY916IF+rwdDfMAkV7OtwuqBVzrE8GR6GFx+wExME=
 github.com/stretchr/testify v1.3.0/go.mod h1:M5WIy9Dh21IEIfnGCwXGc5bZfKNJtfHm1UVUgZn+9EI=
 github.com/stretchr/testify v1.7.0/go.mod h1:6Fq8oRcR53rry900zMqJjRRixrwX3KX962/h/Wwjteg=
